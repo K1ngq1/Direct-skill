@@ -1,0 +1,40 @@
+{
+  "format": "storyboard-field-contract-v1",
+  "description": "本项目字段合同，由 visual_v2.mjs 执行；跨实体、时序、来源和语义记录检查由同一模块补充。不是通用 JSON Schema。",
+  "plan": {
+    "schemaVersion": "2", "mode": "visual-excel-v2", "rubricVersion": "visual-v2",
+    "projectId": "id", "title": "text", "sourceSha256": "sha256", "revision": "positiveInteger",
+    "rules": "object", "run": "object", "spec": "object", "productionInventory": "object",
+    "props": "array", "references": "array", "designNotes": "array", "shots": "array", "calibration": "array",
+    "sourceResolutions": "array", "repairAttempts": "array", "changes": "array", "sealedAt": "text?"
+  },
+  "shot": {
+    "id": "id", "sourceShotIds": "array", "locationId": "id", "seconds": "positiveNumber",
+    "intent": "text", "dimensions": "object", "optics": "object", "shotSchema": "object",
+    "notApplicable": "object", "provenance": "array", "transition": "object", "motion": "text",
+    "reuseOf": "nullableId", "prompt": "object", "videoPrompt": "text?", "review": "nullableObject", "semanticReview": "nullableObject",
+    "variantId": "id", "selection": "object", "candidates": "array"
+  },
+  "asset": {"id": "id", "name": "text", "description": "text", "basis": "text", "provenance": "array"},
+  "prop": {"id": "id", "name": "text", "description": "text", "provenance": "array"},
+  "optics": {"focalLengthMm": "positiveNumber", "aperture": "positiveNumber", "focus": "text", "depthOfField": "text", "frameBasis": "text", "basis": "text"},
+  "provenance": {"field": "text", "kind": "text", "basis": "text", "sourceShotIds": "array"},
+  "prompt": {"text": "text", "sourceHash": "sha256?", "textHash": "sha256?"},
+  "transition": {"fromShotIds": "array", "entry": "text", "exit": "text", "cut": "text"},
+  "selection": {"by": "text", "reason": "text"},
+  "run": {"platform": "text", "model": "nullableText", "failures": "array?", "capabilities": "object?"},
+  "spec": {"aspectRatio": "text", "resolution": "text", "style": "text", "duration": "object"},
+  "semanticReview": {"sourceHash": "sha256?", "promptHash": "sha256?", "reviewer": "text", "checks": "array"},
+  "semanticCheck": {"rule": "text", "status": "text", "evidence": "text", "reason": "text"},
+  "candidate": {"id": "id", "difference": "text", "changes": "object", "baseSourceHash": "sha256", "basePromptHash": "sha256"},
+  "provenanceKinds": ["source", "user", "director", "unknown"],
+  "assetProvenanceFields": ["description"],
+  "shotProvenanceFields": ["intent", "dimensions.moment", "dimensions.camera", "dimensions.composition", "dimensions.lighting", "optics", "shotSchema"],
+  "subjectRequired": ["position", "orientation", "pose", "visibleParts"],
+  "subjectConditional": ["appearance", "clothing", "hands", "gaze", "expression"],
+  "dimensions": ["moment", "appearance", "pose", "expression", "relations", "camera", "optics", "composition", "scene", "lighting", "continuity"],
+  "semanticRules": ["relationships", "staticMoment", "lighting", "continuity"],
+  "shotEditable": ["locationId", "seconds", "intent", "dimensions", "optics", "shotSchema", "notApplicable", "provenance", "transition", "motion", "reuseOf", "prompt", "videoPrompt", "review", "semanticReview"],
+  "candidateEditable": ["intent", "dimensions", "optics", "shotSchema", "notApplicable", "provenance", "transition", "motion", "prompt", "videoPrompt", "review", "semanticReview"],
+  "issueCategories": ["parse", "structure", "reference", "source", "semantic", "runtime", "unsupported", "network", "unknown"]
+}

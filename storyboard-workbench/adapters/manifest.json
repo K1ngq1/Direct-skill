@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "hosts": {
+    "default": "adapters/default.md",
+    "codex": "adapters/codex.md",
+    "claude-code": "adapters/claude-code.md",
+    "workbuddy": "adapters/workbuddy.md"
+  },
+  "models": {
+    "default": null,
+    "glm": "adapters/glm.md"
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "导演分镜与 Excel 总表"
+  short_description: "共用导演规则生成一镜一案的自然 Prompt，校验后汇入 Excel 总表"
+  default_prompt: "使用 $storyboard-workbench 先检查运行能力并读取当前阶段规则，将本次脚本整理成 visual-excel-v2 分镜 JSON 与自然 Prompt，区分硬校验和语义核对，交付含当前方案、检查状态及评分依据的 Excel 总表；默认每镜一案，图片仅按本次明确请求分阶段执行。"

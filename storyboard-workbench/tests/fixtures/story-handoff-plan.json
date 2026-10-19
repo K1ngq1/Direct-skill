@@ -1,0 +1,860 @@
+{
+  "title": "门口的信 · 六镜自动草案验收",
+  "overview": "从普通故事拆成六镜；测试道具交接、门口方向及正反打。仅文本验收，不生成素材。",
+  "aspectRatio": "16:9",
+  "targetDuration": 20,
+  "brief": {
+    "purpose": "软件验收用叙事短片",
+    "deliverables": "可编辑分镜与静帧Prompt",
+    "resolution": "1920×1080",
+    "style": "写实叙事"
+  },
+  "productionInventory": {
+    "characters": [
+      {
+        "id": "CHAR_QING",
+        "version": 1,
+        "name": "林青",
+        "clothing": "灰色衬衫",
+        "description": "等待陈舟并交出信封；人物外貌明确不作设定。",
+        "basis": "验收原文已给定服装，未设年龄、面孔、肤色或发型；不新增外观。",
+        "shotIds": [
+          "S001",
+          "S002",
+          "S003",
+          "S004",
+          "S005",
+          "S006"
+        ]
+      },
+      {
+        "id": "CHAR_ZHOU",
+        "version": 1,
+        "name": "陈舟",
+        "clothing": "深蓝色外套",
+        "description": "从南门进入、接信并离开；人物外貌明确不作设定。",
+        "basis": "验收原文已给定服装，未设年龄、面孔、肤色或发型；不新增外观。",
+        "shotIds": [
+          "S002",
+          "S003",
+          "S004",
+          "S005",
+          "S006"
+        ]
+      }
+    ],
+    "locations": [
+      {
+        "id": "LOC_ROOM",
+        "version": 1,
+        "name": "门口与木桌所在房间",
+        "layout": "南侧一扇门、东侧一张木桌、西侧一扇窗；两人关系轴南北向。",
+        "props": "木桌、白色信封",
+        "environment": "傍晚，西窗柔光",
+        "description": "同一房间贯穿六镜，摄影机保持在关系轴东侧。",
+        "basis": "验收输入明确布局与光源；不当作实际房间测绘。",
+        "shotIds": [
+          "S001",
+          "S002",
+          "S003",
+          "S004",
+          "S005",
+          "S006"
+        ]
+      }
+    ],
+    "notes": "角色和场景来自软件验收输入，不代表用户已采用；无身份图片。"
+  },
+  "storyPlan": {
+    "version": 1,
+    "events": [
+      {
+        "id": "EV001",
+        "version": 1,
+        "description": "等待与空间",
+        "information": "建立等待者、信封与门桌关系",
+        "basis": "source",
+        "sourceRef": {
+          "startLine": 5,
+          "endLine": 5,
+          "quote": "傍晚，林青站在屋内的木桌旁，右手拿着一封未拆的白色信封，等陈舟来。"
+        },
+        "stateChanges": [
+          {
+            "entityId": "PROP_LETTER",
+            "field": "持有者",
+            "before": "林青右手",
+            "after": "林青右手，未拆封"
+          }
+        ]
+      },
+      {
+        "id": "EV002",
+        "version": 1,
+        "description": "入门定位",
+        "information": "交代来人进入与两人位置",
+        "basis": "source",
+        "sourceRef": {
+          "startLine": 5,
+          "endLine": 5,
+          "quote": "陈舟推开南门走进屋，停在门内，林青转向陈舟。"
+        },
+        "stateChanges": [
+          {
+            "entityId": "CHAR_ZHOU",
+            "field": "位置",
+            "before": "门外",
+            "after": "南门内"
+          }
+        ]
+      },
+      {
+        "id": "EV003",
+        "version": 1,
+        "description": "询问正打",
+        "information": "提出问题，让观众注意信封",
+        "basis": "source",
+        "sourceRef": {
+          "startLine": 5,
+          "endLine": 5,
+          "quote": "陈舟看着林青手里的信封，问：“是这封吗？”"
+        },
+        "stateChanges": []
+      },
+      {
+        "id": "EV004",
+        "version": 1,
+        "description": "回答反打与交接",
+        "information": "回答问题并让信封交接可读",
+        "basis": "source",
+        "sourceRef": {
+          "startLine": 5,
+          "endLine": 5,
+          "quote": "林青回答：“是，交给你。”林青把信封递向陈舟，陈舟伸出左手接住。"
+        },
+        "stateChanges": [
+          {
+            "entityId": "PROP_LETTER",
+            "field": "持有状态",
+            "before": "林青右手",
+            "after": "林青右手与陈舟左手共同接触同一个信封"
+          }
+        ]
+      },
+      {
+        "id": "EV005",
+        "version": 1,
+        "description": "接信完成",
+        "information": "明确交接完成和双方反应",
+        "basis": "source",
+        "sourceRef": {
+          "startLine": 5,
+          "endLine": 5,
+          "quote": "林青松开右手，信封留在陈舟左手里，两人短暂对视。"
+        },
+        "stateChanges": [
+          {
+            "entityId": "PROP_LETTER",
+            "field": "持有者",
+            "before": "两人交接中",
+            "after": "陈舟左手，林青右手已松开"
+          }
+        ]
+      },
+      {
+        "id": "EV006",
+        "version": 1,
+        "description": "持信离开",
+        "information": "收束事件，明确人和信封的去向",
+        "basis": "source",
+        "sourceRef": {
+          "startLine": 5,
+          "endLine": 5,
+          "quote": "陈舟左手持信封，从南门离开；林青留在木桌旁，望着门口。"
+        },
+        "stateChanges": [
+          {
+            "entityId": "CHAR_ZHOU",
+            "field": "位置",
+            "before": "南门内",
+            "after": "从南门离开"
+          },
+          {
+            "entityId": "PROP_LETTER",
+            "field": "位置",
+            "before": "屋内陈舟左手",
+            "after": "随陈舟左手离开"
+          }
+        ]
+      }
+    ],
+    "props": [
+      {
+        "id": "PROP_LETTER",
+        "name": "白色信封",
+        "basis": "原稿唯一信封，未拆封；使用稳定ID贯穿交接。"
+      }
+    ],
+    "notes": "原稿事实保留；拆镜、秒数、机位与定格时刻为导演提案。对白保存在工作稿，不要求模型生成文字。未设人物外貌，不编造身份参考。"
+  },
+  "shots": [
+    {
+      "id": "S001",
+      "workingScript": "傍晚，林青站在屋内的木桌旁，右手拿着一封未拆的白色信封，等陈舟来。",
+      "suggestedDuration": 3,
+      "characters": [
+        "CHAR_QING"
+      ],
+      "scene": "门口与木桌所在房间",
+      "purpose": "建立等待者、信封与门桌关系",
+      "eventIds": [
+        "EV001"
+      ],
+      "dependsOnShotIds": [],
+      "recommendation": {
+        "variantId": "A",
+        "reason": "默认拍法用于建立等待者、信封与门桌关系；摄影与秒数为待审提案。"
+      },
+      "variants": [
+        {
+          "id": "A",
+          "title": "等待与空间",
+          "description": "林青在桌旁站着，右手持未拆信封，目光停在南门。",
+          "rationale": "以单一时刻表达建立等待者、信封与门桌关系，保持东侧关系轴。",
+          "constraints": [],
+          "tags": [],
+          "referenceIds": [],
+          "shotSchema": {
+            "referenceIds": [],
+            "subjects": [
+              {
+                "assetId": "CHAR_QING",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "灰色衬衫",
+                "position": "东侧木桌旁、屋内北侧",
+                "orientation": "朝南门",
+                "pose": "站立等待",
+                "hands": "右手握信封下缘",
+                "gaze": "望向门口",
+                "expression": "",
+                "visibleParts": ""
+              }
+            ],
+            "props": [
+              {
+                "id": "PROP_LETTER",
+                "name": "白色信封",
+                "state": "未拆封",
+                "position": "林青右手、胸前偏下",
+                "holderAssetIds": [
+                  "CHAR_QING"
+                ],
+                "referenceIds": []
+              }
+            ],
+            "relations": []
+          },
+          "breakdown": {
+            "content": "林青在桌旁站着，右手持未拆信封，目光停在南门。",
+            "scene": "同一房间：南门、东侧木桌、西窗；傍晚。",
+            "camera": {
+              "shotSize": "全景",
+              "position": "屋内东南侧，平视朝西北",
+              "focalLength": "28mm",
+              "focus": "门、木桌与林青均清楚可辨"
+            },
+            "composition": "木桌与林青在中景，南门在后景，窗光从西侧进入；门、桌的关系先被读到。",
+            "lighting": "柔光从西窗进入，室内明暗平稳。",
+            "characters": "",
+            "pose": "",
+            "texture": "白色信封表面与木桌纹理可辨。",
+            "continuity": "陈舟尚未入屋；信封未拆，只在林青右手。",
+            "decision": "用全景保留本镜所需人物、手部或空间信息。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "S002",
+      "workingScript": "陈舟推开南门走进屋，停在门内，林青转向陈舟。",
+      "suggestedDuration": 3,
+      "characters": [
+        "CHAR_QING",
+        "CHAR_ZHOU"
+      ],
+      "scene": "门口与木桌所在房间",
+      "purpose": "交代来人进入与两人位置",
+      "eventIds": [
+        "EV002"
+      ],
+      "dependsOnShotIds": [],
+      "recommendation": {
+        "variantId": "A",
+        "reason": "默认拍法用于交代来人进入与两人位置；摄影与秒数为待审提案。"
+      },
+      "variants": [
+        {
+          "id": "A",
+          "title": "入门定位",
+          "description": "陈舟刚在南门内站定，林青已转向陈舟。",
+          "rationale": "以单一时刻表达交代来人进入与两人位置，保持东侧关系轴。",
+          "constraints": [],
+          "tags": [],
+          "referenceIds": [],
+          "shotSchema": {
+            "referenceIds": [],
+            "subjects": [
+              {
+                "assetId": "CHAR_QING",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "灰色衬衫",
+                "position": "北侧木桌旁",
+                "orientation": "转向南门",
+                "pose": "身体已转向陈舟",
+                "hands": "右手持信封",
+                "gaze": "看陈舟",
+                "expression": "",
+                "visibleParts": ""
+              },
+              {
+                "assetId": "CHAR_ZHOU",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "深蓝色外套",
+                "position": "南门内",
+                "orientation": "面向北侧林青",
+                "pose": "刚停下脚步",
+                "hands": "双手空着",
+                "gaze": "看林青",
+                "expression": "",
+                "visibleParts": ""
+              }
+            ],
+            "props": [
+              {
+                "id": "PROP_LETTER",
+                "name": "白色信封",
+                "state": "未拆封",
+                "position": "林青右手、木桌旁",
+                "holderAssetIds": [
+                  "CHAR_QING"
+                ],
+                "referenceIds": []
+              }
+            ],
+            "relations": [
+              {
+                "id": "REL_ENTRY",
+                "type": "sameFrame",
+                "subjectIds": [
+                  "CHAR_QING",
+                  "CHAR_ZHOU"
+                ],
+                "propIds": [],
+                "description": "门内的陈舟与木桌旁的林青同框，陈舟在南、林青在北。"
+              }
+            ]
+          },
+          "breakdown": {
+            "content": "陈舟刚在南门内站定，林青已转向陈舟。",
+            "scene": "同一房间：南门、东侧木桌、西窗；傍晚。",
+            "camera": {
+              "shotSize": "双人中景",
+              "position": "关系轴东侧，平视",
+              "focalLength": "35mm",
+              "focus": "两人位置与林青手中信封均可辨"
+            },
+            "composition": "门内的陈舟在南侧，木桌旁的林青在北侧，两人之间留出交接空间。",
+            "lighting": "柔光从西窗进入，室内明暗平稳。",
+            "characters": "",
+            "pose": "",
+            "texture": "白色信封表面与木桌纹理可辨。",
+            "continuity": "陈舟双手空着，信封仍在林青右手；两人沿南北轴相对。",
+            "decision": "用双人中景保留本镜所需人物、手部或空间信息。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "S003",
+      "workingScript": "陈舟看着林青手里的信封，问：“是这封吗？”",
+      "suggestedDuration": 4,
+      "characters": [
+        "CHAR_QING",
+        "CHAR_ZHOU"
+      ],
+      "scene": "门口与木桌所在房间",
+      "purpose": "提出问题，让观众注意信封",
+      "eventIds": [
+        "EV003"
+      ],
+      "dependsOnShotIds": [
+        "S002"
+      ],
+      "recommendation": {
+        "variantId": "A",
+        "reason": "默认拍法用于提出问题，让观众注意信封；摄影与秒数为待审提案。"
+      },
+      "variants": [
+        {
+          "id": "A",
+          "title": "询问正打",
+          "description": "陈舟嘴唇微张，视线落在林青手里的信封上。",
+          "rationale": "以单一时刻表达提出问题，让观众注意信封，保持东侧关系轴。",
+          "constraints": [],
+          "tags": [],
+          "referenceIds": [],
+          "shotSchema": {
+            "referenceIds": [],
+            "subjects": [
+              {
+                "assetId": "CHAR_QING",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "灰色衬衫",
+                "position": "北侧近景",
+                "orientation": "面向南侧陈舟",
+                "pose": "肩背落在前景",
+                "hands": "右手仍持信封",
+                "gaze": "",
+                "expression": "",
+                "visibleParts": "仅肩背与持信的右手"
+              },
+              {
+                "assetId": "CHAR_ZHOU",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "深蓝色外套",
+                "position": "南侧中景",
+                "orientation": "面向林青",
+                "pose": "站定、嘴唇微张",
+                "hands": "双手空着",
+                "gaze": "看林青手里的信封",
+                "expression": "",
+                "visibleParts": ""
+              }
+            ],
+            "props": [
+              {
+                "id": "PROP_LETTER",
+                "name": "白色信封",
+                "state": "未拆封",
+                "position": "前景林青右手，陈舟视线能看到",
+                "holderAssetIds": [
+                  "CHAR_QING"
+                ],
+                "referenceIds": []
+              }
+            ],
+            "relations": [
+              {
+                "id": "REL_LOOK",
+                "type": "gaze",
+                "subjectIds": [
+                  "CHAR_ZHOU"
+                ],
+                "propIds": [
+                  "PROP_LETTER"
+                ],
+                "description": "陈舟的视线落在林青右手的信封上。"
+              }
+            ]
+          },
+          "breakdown": {
+            "content": "陈舟嘴唇微张，视线落在林青手里的信封上。",
+            "scene": "同一房间：南门、东侧木桌、西窗；傍晚。",
+            "camera": {
+              "shotSize": "过肩中近景",
+              "position": "林青北侧偏东，平视看向南侧陈舟",
+              "focalLength": "50mm",
+              "focus": "陈舟及他看向的信封可辨，前景肩背略虚"
+            },
+            "composition": "林青肩背在近景一侧，陈舟在中景，信封进入陈舟视线范围；不把门移到另一面墙。",
+            "lighting": "柔光从西窗进入，室内明暗平稳。",
+            "characters": "",
+            "pose": "",
+            "texture": "白色信封表面与木桌纹理可辨。",
+            "continuity": "沿用门内站位与西窗光；信封尚未转移，不越过关系轴。",
+            "decision": "用过肩中近景保留本镜所需人物、手部或空间信息。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "S004",
+      "workingScript": "林青回答：“是，交给你。”林青把信封递向陈舟，陈舟伸出左手接住。",
+      "suggestedDuration": 4,
+      "characters": [
+        "CHAR_QING",
+        "CHAR_ZHOU"
+      ],
+      "scene": "门口与木桌所在房间",
+      "purpose": "回答问题并让信封交接可读",
+      "eventIds": [
+        "EV004"
+      ],
+      "dependsOnShotIds": [
+        "S003"
+      ],
+      "recommendation": {
+        "variantId": "A",
+        "reason": "默认拍法用于回答问题并让信封交接可读；摄影与秒数为待审提案。"
+      },
+      "variants": [
+        {
+          "id": "A",
+          "title": "回答反打与交接",
+          "description": "林青右手尚未松开信封，陈舟左手已接触同一信封下缘。",
+          "rationale": "以单一时刻表达回答问题并让信封交接可读，保持东侧关系轴。",
+          "constraints": [],
+          "tags": [],
+          "referenceIds": [],
+          "shotSchema": {
+            "referenceIds": [],
+            "subjects": [
+              {
+                "assetId": "CHAR_QING",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "灰色衬衫",
+                "position": "北侧中景",
+                "orientation": "面向陈舟",
+                "pose": "右臂伸向陈舟",
+                "hands": "右手尚未离开信封",
+                "gaze": "看陈舟",
+                "expression": "",
+                "visibleParts": ""
+              },
+              {
+                "assetId": "CHAR_ZHOU",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "深蓝色外套",
+                "position": "南侧前景",
+                "orientation": "面向林青",
+                "pose": "左臂伸向信封",
+                "hands": "左手已托住信封下缘",
+                "gaze": "",
+                "expression": "",
+                "visibleParts": "肩背与接信的左手"
+              }
+            ],
+            "props": [
+              {
+                "id": "PROP_LETTER",
+                "name": "白色信封",
+                "state": "未拆封，交接瞬间只有一个信封",
+                "position": "两人之间，林青右手与陈舟左手共同接触",
+                "holderAssetIds": [
+                  "CHAR_QING",
+                  "CHAR_ZHOU"
+                ],
+                "referenceIds": []
+              }
+            ],
+            "relations": [
+              {
+                "id": "REL_HANDOFF",
+                "type": "contact",
+                "subjectIds": [
+                  "CHAR_QING",
+                  "CHAR_ZHOU"
+                ],
+                "propIds": [
+                  "PROP_LETTER"
+                ],
+                "description": "林青右手与陈舟左手接触同一信封，不能复制信封。"
+              }
+            ]
+          },
+          "breakdown": {
+            "content": "林青右手尚未松开信封，陈舟左手已接触同一信封下缘。",
+            "scene": "同一房间：南门、东侧木桌、西窗；傍晚。",
+            "camera": {
+              "shotSize": "反向过肩中近景",
+              "position": "陈舟南侧偏东，平视看向北侧林青",
+              "focalLength": "50mm",
+              "focus": "林青与两只接触信封的手都清楚"
+            },
+            "composition": "陈舟肩背在近景一侧，林青在中景，双手与信封位于两人之间，不被肩膀遮住。",
+            "lighting": "柔光从西窗进入，室内明暗平稳。",
+            "characters": "",
+            "pose": "",
+            "texture": "白色信封表面与木桌纹理可辨。",
+            "continuity": "保持上一镜南北站位和东侧机位；同一信封同时接触两只手，不新增第二封。",
+            "decision": "用反向过肩中近景保留本镜所需人物、手部或空间信息。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "S005",
+      "workingScript": "林青松开右手，信封留在陈舟左手里，两人短暂对视。",
+      "suggestedDuration": 3,
+      "characters": [
+        "CHAR_QING",
+        "CHAR_ZHOU"
+      ],
+      "scene": "门口与木桌所在房间",
+      "purpose": "明确交接完成和双方反应",
+      "eventIds": [
+        "EV005"
+      ],
+      "dependsOnShotIds": [
+        "S004"
+      ],
+      "recommendation": {
+        "variantId": "A",
+        "reason": "默认拍法用于明确交接完成和双方反应；摄影与秒数为待审提案。"
+      },
+      "variants": [
+        {
+          "id": "A",
+          "title": "接信完成",
+          "description": "陈舟左手持信，林青右手已空，两人对视。",
+          "rationale": "以单一时刻表达明确交接完成和双方反应，保持东侧关系轴。",
+          "constraints": [],
+          "tags": [],
+          "referenceIds": [],
+          "shotSchema": {
+            "referenceIds": [],
+            "subjects": [
+              {
+                "assetId": "CHAR_QING",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "灰色衬衫",
+                "position": "北侧、与陈舟相对",
+                "orientation": "面向陈舟",
+                "pose": "站立",
+                "hands": "空右手停在身前",
+                "gaze": "看陈舟",
+                "expression": "",
+                "visibleParts": ""
+              },
+              {
+                "assetId": "CHAR_ZHOU",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "深蓝色外套",
+                "position": "南侧、与林青相对",
+                "orientation": "面向林青",
+                "pose": "站立",
+                "hands": "左手持信封",
+                "gaze": "看林青",
+                "expression": "",
+                "visibleParts": ""
+              }
+            ],
+            "props": [
+              {
+                "id": "PROP_LETTER",
+                "name": "白色信封",
+                "state": "未拆封，林青已松手",
+                "position": "陈舟左手、腰部前方",
+                "holderAssetIds": [
+                  "CHAR_ZHOU"
+                ],
+                "referenceIds": []
+              }
+            ],
+            "relations": [
+              {
+                "id": "REL_MEET",
+                "type": "gaze",
+                "subjectIds": [
+                  "CHAR_QING",
+                  "CHAR_ZHOU"
+                ],
+                "propIds": [],
+                "description": "林青与陈舟对视，两人和陈舟左手的信封都可辨。"
+              }
+            ]
+          },
+          "breakdown": {
+            "content": "陈舟左手持信，林青右手已空，两人对视。",
+            "scene": "同一房间：南门、东侧木桌、西窗；傍晚。",
+            "camera": {
+              "shotSize": "双人中近景",
+              "position": "轴线东侧平视，两人侧面同框",
+              "focalLength": "50mm",
+              "focus": "两人视线、林青空右手与陈舟左手信封可辨"
+            },
+            "composition": "两人相对，手部留在画面下半部，林青空手与陈舟持信先被看清，再读到对视。",
+            "lighting": "柔光从西窗进入，室内明暗平稳。",
+            "characters": "",
+            "pose": "",
+            "texture": "白色信封表面与木桌纹理可辨。",
+            "continuity": "交接已经完成，林青右手空，陈舟左手持信；衣服、门桌与光源不变。",
+            "decision": "用双人中近景保留本镜所需人物、手部或空间信息。"
+          }
+        }
+      ]
+    },
+    {
+      "id": "S006",
+      "workingScript": "陈舟左手持信封，从南门离开；林青留在木桌旁，望着门口。",
+      "suggestedDuration": 3,
+      "characters": [
+        "CHAR_QING",
+        "CHAR_ZHOU"
+      ],
+      "scene": "门口与木桌所在房间",
+      "purpose": "收束事件，明确人和信封的去向",
+      "eventIds": [
+        "EV006"
+      ],
+      "dependsOnShotIds": [
+        "S005"
+      ],
+      "recommendation": {
+        "variantId": "A",
+        "reason": "默认拍法用于收束事件，明确人和信封的去向；摄影与秒数为待审提案。"
+      },
+      "variants": [
+        {
+          "id": "A",
+          "title": "持信离开",
+          "description": "陈舟一只脚迈过南门门槛，左手的信封仍清楚可见，林青留在桌旁。",
+          "rationale": "以单一时刻表达收束事件，明确人和信封的去向，保持东侧关系轴。",
+          "constraints": [],
+          "tags": [],
+          "referenceIds": [],
+          "shotSchema": {
+            "referenceIds": [],
+            "subjects": [
+              {
+                "assetId": "CHAR_QING",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "灰色衬衫",
+                "position": "北侧木桌旁、后景",
+                "orientation": "朝南门",
+                "pose": "留在屋内",
+                "hands": "双手没有信封",
+                "gaze": "望着门口",
+                "expression": "",
+                "visibleParts": ""
+              },
+              {
+                "assetId": "CHAR_ZHOU",
+                "referenceIds": [],
+                "appearance": "",
+                "clothing": "深蓝色外套",
+                "position": "南门口、中景",
+                "orientation": "朝门外",
+                "pose": "一只脚迈过门槛",
+                "hands": "左手持信封",
+                "gaze": "",
+                "expression": "",
+                "visibleParts": ""
+              }
+            ],
+            "props": [
+              {
+                "id": "PROP_LETTER",
+                "name": "白色信封",
+                "state": "未拆封",
+                "position": "门口陈舟左手，随陈舟离开",
+                "holderAssetIds": [
+                  "CHAR_ZHOU"
+                ],
+                "referenceIds": []
+              }
+            ],
+            "relations": [
+              {
+                "id": "REL_EXIT",
+                "type": "sameFrame",
+                "subjectIds": [
+                  "CHAR_QING",
+                  "CHAR_ZHOU"
+                ],
+                "propIds": [],
+                "description": "陈舟在南门离开，林青仍在北侧木桌旁；信封只在陈舟左手。"
+              }
+            ]
+          },
+          "breakdown": {
+            "content": "陈舟一只脚迈过南门门槛，左手的信封仍清楚可见，林青留在桌旁。",
+            "scene": "同一房间：南门、东侧木桌、西窗；傍晚。",
+            "camera": {
+              "shotSize": "中全景",
+              "position": "屋内东侧平视，朝南门",
+              "focalLength": "35mm",
+              "focus": "门口持信者与后景留守者均可辨"
+            },
+            "composition": "陈舟在门口中景，林青在桌旁后景，出门方向与先前入门一致，信封不被门框遮住。",
+            "lighting": "柔光从西窗进入，室内明暗平稳。",
+            "characters": "",
+            "pose": "",
+            "texture": "白色信封表面与木桌纹理可辨。",
+            "continuity": "信封随陈舟左手出门，林青留下；门在南侧，不能从另一扇门离开。",
+            "decision": "用中全景保留本镜所需人物、手部或空间信息。"
+          }
+        }
+      ]
+    }
+  ],
+  "references": [],
+  "sharedConstraints": [
+    "保留两句原对白；对白由后续制作处理，不要求生图包含文字。",
+    "只有一个未拆白色信封；衣服、门桌布局与西窗光连续。"
+  ],
+  "reviewIssues": [],
+  "promptSections": [
+    {
+      "id": "SCENE_ROOM",
+      "category": "sceneViews",
+      "title": "房间空景",
+      "shotIds": [
+        "S001",
+        "S002",
+        "S003",
+        "S004",
+        "S005",
+        "S006"
+      ],
+      "assetIds": [
+        "LOC_ROOM"
+      ],
+      "tags": [],
+      "options": [],
+      "rationale": "布局来自验收原文；只描述空景，不增加剧情时长。",
+      "version": 1,
+      "origin": "director_interpretation",
+      "prompts": [
+        {
+          "label": "东侧平视",
+          "text": "空房间，南侧一扇门，东侧一张木桌，西侧窗户透入傍晚柔光。摄影机从屋内东侧平视，保持三者实际方位，不加人物、不镜像房间。写实叙事，16:9、1920×1080。"
+        }
+      ]
+    },
+    {
+      "id": "FRAME_HANDOFF",
+      "category": "shotFrames",
+      "title": "交接手部补帧",
+      "shotIds": [
+        "S004"
+      ],
+      "variantId": "A",
+      "assetIds": [
+        "CHAR_QING",
+        "CHAR_ZHOU"
+      ],
+      "tags": [],
+      "options": [],
+      "rationale": "交接主帧之后、松手之前的手部定格，属于S004，不增加时长，也不是另一拍法。",
+      "version": 1,
+      "origin": "director_interpretation",
+      "prompts": [
+        {
+          "label": "松手前",
+          "text": "林青右手刚要松开同一只未拆白色信封，陈舟左手托住信封下缘。手部近景，只取双方袖口、手和这一只信封，灰色衬衫属于林青，深蓝色外套属于陈舟。摄影机仍在关系轴东侧，西窗柔光不变；不复制信封。写实叙事，16:9、1920×1080。"
+        }
+      ]
+    }
+  ]
+}

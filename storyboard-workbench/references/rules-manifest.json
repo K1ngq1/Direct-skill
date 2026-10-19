@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "rulesVersion": "storyboard-rules-v1",
+  "core": [
+    "SKILL.md",
+    "references/visual-workflow.md"
+  ],
+  "stages": {
+    "ingest": [],
+    "plan": ["references/directing.md", "references/character-prompts.md", "schemas/visual-plan-v2.json"],
+    "prompt": ["references/prompt-language.md", "references/humanizer-zh/SKILL.md"],
+    "review": ["references/visual-rubric.md", "schemas/visual-plan-v2.json"],
+    "export": ["schemas/visual-plan-v2.json"],
+    "legacy": ["references/legacy-workbench.md", "references/data-contract.md", "references/production-framework.md", "references/story-planning.md"]
+  },
+  "scripts": [
+    "scripts/runtime.mjs",
+    "scripts/import_excel.py",
+    "scripts/visual.mjs",
+    "scripts/visual_v2.mjs",
+    "scripts/visual_state.mjs",
+    "scripts/project.mjs",
+    "scripts/export_visual_excel.mjs",
+    "scripts/export_excel.mjs",
+    "scripts/vendor/exceljs.cjs"
+  ]
+}

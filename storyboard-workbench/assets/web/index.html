@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>分镜工作台</title><link rel="stylesheet" href="/style.css"><script src="/app.js" type="module"></script></head>
+<body>
+  <header class="topbar"><div><span class="eyebrow">分镜与 PROMPT 工作台</span><h1 id="title">分镜工作台</h1><p id="subtitle"></p></div><div class="actions"><span id="save-status" role="status"></span><button id="annotate" aria-pressed="false">标注修改</button><button id="annotate-cell" class="secondary" hidden>批注选中格</button><button id="restore-annotation" class="secondary" hidden>恢复批注草稿</button><button id="legacy-prompt-drafts" class="secondary" hidden>旧 Prompt 草稿</button><button id="refresh" class="secondary">读取最新结果</button><button id="retry" class="secondary" hidden>比较并重试保存</button><button id="discard-drafts" class="text-button">放弃草稿</button></div></header>
+  <div id="notice" role="status" aria-live="polite"></div>
+  <main>
+    <section class="workbench">
+      <div class="section-heading"><h2 id="workbench-title">全部镜号静态 Prompt</h2><div class="actions"><div class="prompt-summary"><span id="progress"></span><a href="/exports/static-prompts.md" download>下载全部静态 Prompt</a></div><span id="excel-selection-count" class="muted" aria-live="polite"></span><button id="export-excel" class="secondary" disabled>导出已选 Excel</button></div></div>
+      <nav id="main-tags" aria-label="工作表视图"></nav>
+      <p id="category-hint" class="category-hint"></p>
+      <div id="workspace" class="workspace"><div class="table-panel"><section id="shot-quiz" aria-label="逐镜选择" hidden></section><div class="scroll-tools"><button id="scroll-left" class="secondary" aria-label="向左滚动表格">←</button><div id="top-scroll" tabindex="0" role="region" aria-label="表格横向滚动"><div id="scroll-width"></div></div><button id="scroll-right" class="secondary" aria-label="向右滚动表格">→</button></div><div class="table-wrap"><table><thead><tr id="shot-head"></tr></thead><tbody id="shots"></tbody></table></div></div><aside id="drawer" class="drawer" aria-label="单元格批注与镜头详情" hidden></aside></div>
+    </section>
+    <section class="batch-panel auxiliary"><div class="section-heading"><div><h2>静态图片提交准备</h2><p id="batch-readiness" class="muted"></p></div><button id="prepare-batch">准备前三镜 LibTV 清单</button></div><div id="batch-status"></div></section>
+    <details class="auxiliary"><summary>项目资料与核对 <span id="issue-count"></span></summary>
+      <p id="overview"></p><p id="boundary" class="muted"></p>
+      <details id="story-plan-panel" hidden><summary>全片事件与连续性计划</summary><div id="story-plan"></div></details>
+      <h2>原稿参考图</h2><div id="references" class="reference-grid"></div><h2>待核对事项</h2><div id="issues"></div>
+    </details>
+    <details class="auxiliary"><summary>导出与交给 Agent</summary><p>批注提交后，回到当前 Agent 说：<strong>“处理批注，并同步我直接编辑过的内容，给出修改前后差异。”</strong></p><p class="muted">网页保存编辑与批注；创作使用当前 Agent 的模型思考与视觉能力。</p><div class="export-links"><a id="draft-export-link" href="/exports/current-draft.md" download hidden>当前草案 Prompt .md</a><a href="/exports/static-prompts.md" download>全部镜号与场景静态 Prompt .md</a><a href="/exports/storyboard.md" download>完整分镜框架 .md</a><a href="/exports/selected-prompts.md" download>选定 Prompt .md</a><a href="/exports/pending-comments.md" download>待处理批注与同步 .md</a><a href="/exports/project.json" download>完整状态 .json</a></div><p class="muted">移交时同时带上项目 sources、references 和 revisions 目录。</p></details>
+  </main>
+  <dialog id="image-dialog"><button id="close-image" class="secondary">关闭原图</button><img id="large-image" alt=""><h2 id="image-title"></h2><p id="image-observations"></p><p id="image-usage"></p><p id="image-uncertainty" class="muted"></p></dialog>
+  <dialog id="legacy-prompt-dialog" aria-label="保留的旧 Prompt 草稿"><button id="close-legacy-prompts" class="secondary">关闭</button><h2>保留的旧 Prompt 草稿</h2><p class="muted">这些文字保留供参考。当前生图 Prompt 已由分镜总表汇总，旧草稿不会覆盖当前内容。</p><div id="legacy-prompt-list"></div></dialog>
+  <dialog id="focus-dialog" aria-label="全文专注编辑"><header class="focus-toolbar"><div><span class="eyebrow">全文专注编辑</span><h2 id="focus-title"></h2></div><div class="focus-controls"><button id="focus-prev" class="secondary">上一项</button><button id="focus-next" class="secondary">下一项</button><select id="focus-variant" aria-label="专注编辑候选拍法"></select><select id="focus-field" aria-label="专注编辑字段"></select><button id="focus-edit" class="secondary">编辑全文</button><button id="focus-comment" class="secondary">批注</button><button id="close-focus" class="secondary">完成并返回表格</button></div></header><p class="focus-hint">Ctrl+Enter 保存 · Esc 取消本次编辑 · 切换或返回自动保存，失败草稿会保留</p><div class="focus-layout"><section id="focus-content"></section><aside id="focus-comments" class="drawer" aria-label="专注编辑批注"></aside></div></dialog>
+</body></html>
