@@ -12,6 +12,7 @@
 !/docs/
 /docs/*
 !/docs/FIRST-RELEASE.md
+!/docs/MEDIA-PIPELINE-VERIFICATION.md
 !/.github/
 /.github/*
 !/.github/workflows/
@@ -46,6 +47,18 @@
 !/storyboard-workbench/tests/visual-v2.test.mjs
 !/storyboard-workbench/tests/visual-v2-export.test.mjs
 !/storyboard-workbench/tests/generation.test.mjs
+!/storyboard-workbench/tests/generation-batch.test.mjs
+!/storyboard-workbench/tests/generation-pipeline.test.mjs
+!/storyboard-workbench/tests/generation-bridge.test.mjs
+!/storyboard-workbench/tests/libtv-assets.test.mjs
+!/storyboard-workbench/tests/libtv-generation.test.mjs
+!/storyboard-workbench/tests/libtv-generation-store.test.mjs
+!/storyboard-workbench/tests/libtv-delivery.test.mjs
+!/storyboard-workbench/tests/libtv-image-file.test.mjs
+!/storyboard-workbench/tests/video.test.mjs
+!/storyboard-workbench/tests/excel-delivery.test.mjs
+!/storyboard-workbench/tests/patch-excel.test.mjs
+!/storyboard-workbench/tests/scene-art.test.mjs
 !/storyboard-workbench/tests/excel-export.test.mjs
 !/storyboard-workbench/tests/test_import.py
 !/storyboard-workbench/tests/test_import_mapping.py

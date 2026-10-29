@@ -1,13 +1,20 @@
 import ExcelJS from './vendor/exceljs.cjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { addSheet } from './export_excel.mjs';
 import { dimensionsFor, reviewTotal, calibrationBackground, rubricVersion, promptHash } from './visual.mjs';
 import { assetPlanHash } from './visual_v2.mjs';
 import { ProjectError } from './project.mjs';
 
 const joined = values => values.join('\n');
-const bar = value => '█'.repeat(Math.round(value / 10)) + '░'.repeat(10 - Math.round(value / 10));
 const assessment = review => review.rewrite.needed ? '建议重写；本次未执行' : '保留当前一稿';
-const color = value => value >= 4 ? 'FFDDEDE1' : value >= 3 ? 'FFFFEEC2' : 'FFF8D9D5';
+
+export function textLines(text, columnWidth) {
+  // shortcut: conservative YaHei wrapping estimates, use reader metrics if fonts or wrapping rules change.
+  const width = Math.max(8, (columnWidth - 2) * 0.75);
+  return text.split('\n').reduce((total, line) => total + Math.max(1, Math.ceil([...line].reduce((n, char) => n + (char.codePointAt(0) > 255 ? 2 : 1), 0) / width)), 0);
+}
 
 function readable(sheet, widths = {}) {
   for (const [key, width] of Object.entries(widths)) sheet.getColumn(Number(key)).width = width;
@@ -17,34 +24,15 @@ function readable(sheet, widths = {}) {
     let lines = 2;
     row.eachCell(cell => {
       const width = sheet.getColumn(cell.col).width ?? 20;
-      const text = String(cell.value ?? '');
-      const count = text.split('\n').reduce((total, line) => total + Math.max(1, Math.ceil([...line].reduce((n, ch) => n + (ch.charCodeAt(0) > 255 ? 2 : 1), 0) / Math.max(8, width - 2))), 0);
+      const text = cell.text;
+      const count = textLines(text, width);
       lines = Math.max(lines, count);
       if (rowNumber % 2 === 0) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F6F9' } };
     });
-    row.height = Math.min(409, Math.max(42, lines * 15 + 12));
+    row.height = Math.min(409, Math.max(54, lines * 18 + 18));
   });
   sheet.pageSetup = { orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:1' };
   return sheet;
-}
-
-function scoreSheets(workbook, entries, version) {
-  const dimensions = dimensionsFor(version), lastScore = dimensions.length + 3, firstNote = lastScore + 1;
-  const summary = readable(addSheet(workbook, '评分总览', ['镜号／样本ID', 'Agent文本分（100）', '评分条', ...dimensions.map(([, label]) => label + '（5）'), '处理建议', '为什么高', '为什么低', '重写原因与执行状态'], entries.map(entry => [
-    entry.id, reviewTotal(entry.review), bar(reviewTotal(entry.review)),
-    ...dimensions.map(([key]) => entry.review.scores.find(item => item.dimension === key).score ?? 'N/A'),
-    assessment(entry.review), joined(entry.review.strengths), joined(entry.review.weaknesses), entry.review.rewrite.reason + '\n实际重写：未执行'
-  ])), { 1: 18, 2: 19, 3: 27, [firstNote]: 26, [firstNote + 1]: 52, [firstNote + 2]: 52, [firstNote + 3]: 58 });
-  for (let col = 4; col <= lastScore; col++) summary.getColumn(col).width = dimensions[col - 4][0] === 'optics' ? 26 : 17;
-  summary.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }];
-  if (entries.length) {
-    summary.addConditionalFormatting({ ref: `B2:B${entries.length + 1}`, rules: [{ type: 'dataBar', minLength: 0, maxLength: 100, showValue: true, gradient: false, cfvo: [{ type: 'num', value: 0 }, { type: 'num', value: 100 }], color: { argb: 'FF65A9C2' } }] });
-    summary.addConditionalFormatting({ ref: `D2:${summary.getColumn(lastScore).letter}${entries.length + 1}`, rules: [{ type: 'colorScale', cfvo: [{ type: 'num', value: 0 }, { type: 'num', value: 3 }, { type: 'num', value: 5 }], color: [{ argb: 'FFF4BCB5' }, { argb: 'FFFFE8AD' }, { argb: 'FFB7DEC2' }] }] });
-    summary.eachRow((row, n) => { if (n > 1) for (let col = 4; col <= lastScore; col++) { const cell = row.getCell(col); if (typeof cell.value === 'number') cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: color(cell.value) } }; } });
-  }
-  readable(addSheet(workbook, '评分依据', ['镜号／样本ID', '维度', '权重', 'Agent分（5）', 'Prompt原文证据', '得分或扣分理由', '评审者', '规则版本', 'Prompt哈希'], entries.flatMap(entry => entry.review.scores.map(score => [
-    entry.id, dimensions.find(([key]) => key === score.dimension)[1], dimensions.find(([key]) => key === score.dimension)[2], score.score ?? 'N/A', score.evidence, score.reason, entry.review.reviewer, entry.review.rubricVersion, entry.review.promptHash
-  ]))), { 1: 18, 2: 26, 3: 10, 4: 13, 5: 65, 6: 80, 7: 22, 8: 18, 9: 25 });
 }
 
 function createWorkbook(title) {
@@ -84,18 +72,44 @@ function sourcePosition(project, shot) {
   }).join('\n');
 }
 
-export function exportVisualMarkdown(plan, project, report = null) {
+export function exportVisualMarkdown(plan, project, report = null, context = {}) {
   const cell = value => String(value ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, '<br>');
-  const lines = [`# ${plan.title}`, '', `项目：${plan.projectId}；修订：${plan.revision ?? '未记录'}；${statusText(report?.status)}`, '',
-    '总表中的采用来源不表示用户确认；程序检查不代替画面语义复核。', '',
+  const json = value => ['```json', JSON.stringify(value, null, 2), '```'];
+  const version = plan.rubricVersion ?? rubricVersion;
+  const lines = [`# ${context.workflow?.title ?? plan.title} · 制作日志`, '', `项目：${plan.projectId}；修订：${plan.revision ?? '未记录'}；${statusText(report?.status)}`, '',
+    '内部生产记录；评分、检查、版本和来源证据仅保留在本日志，不进入用户脚本 Excel。采用与检查通过不表示用户确认；程序检查不代替画面语义复核。', '',
+    `原件路径：${project.source?.path ?? '未记录'}；原件哈希：${project.source?.sha256 ?? plan.sourceSha256 ?? '未记录'}`, '',
     '| 镜号 | 秒数 | 当前方案ID | 采用来源 | 检查状态 |', '| --- | --- | --- | --- | --- |',
     ...plan.shots.map(shot => `| ${[shot.id, shot.seconds, shot.variantId, selectionText(shot), exportCheck(plan, shot, report).status].map(cell).join(' | ')} |`)];
+  const reviewLog = (entry, permitScore = true) => {
+    if (!entry.review) return ['尚未评分。'];
+    const review = entry.review, valid = currentReview(entry, version) && permitScore;
+    const dimensions = dimensionsFor(version);
+    return [valid ? `有效文本评分：${reviewTotal(review)} / 100` : '评分未验证或已失效，不计分；以下原始评价仅归档。',
+      `评审者：${review.reviewer ?? '未记录'}；评分规则：${review.rubricVersion ?? '未记录'}；Prompt哈希：${review.promptHash ?? '未记录'}`, '',
+      '| 维度 | 权重 | 原始分值 | Prompt原文证据 | 理由 |', '| --- | --- | --- | --- | --- |',
+      ...(review.scores ?? []).map(score => {
+        const definition = dimensions.find(([key]) => key === score.dimension);
+        return `| ${[definition?.[1] ?? score.dimension, definition?.[2], score.score ?? 'N/A', score.evidence, score.reason].map(cell).join(' | ')} |`;
+      }), '', `优点：${(review.strengths ?? []).join('；') || '未记录'}`, `不足：${(review.weaknesses ?? []).join('；') || '未记录'}`,
+      `重写建议：${review.rewrite ? assessment(review) : '未记录'}；原因：${review.rewrite?.reason ?? '未记录'}；实际执行：${review.rewrite?.executed === true ? '已执行' : '未执行'}`, '',
+      ...json(review)];
+  };
   for (const shot of plan.shots) {
     const check = exportCheck(plan, shot, report);
     lines.push('', `## ${shot.id}`, '', `当前方案：${shot.variantId ?? '未记录'}；${selectionText(shot)}；${check.status}`, '',
       `原稿来源：${sourcePosition(project, shot).replace(/\n/g, '；')}`, '',
+      `原稿内容：${shot.sourceShotIds.map(id => project.shots.find(source => source.id === id)?.original ?? `缺少原稿：${id}`).join('\n')}`, '',
+      `Prompt哈希：${shot.prompt.textHash ?? promptHash(shot.prompt.text)}；来源哈希：${shot.prompt.sourceHash ?? '未记录'}`, '',
       ...check.issues.flatMap(issue => [issueText(issue), '']), '### 自然语言 Prompt', '', shot.prompt.text);
-    if (plan.schemaVersion === 2 && shot.videoPrompt !== undefined) lines.push('', '### 视频 Prompt', '', shot.videoPrompt);
+    if (context.workflow?.shotPrompts?.some(item => item.shotId === shot.id)) lines.push('', '本轮静帧正文与参考已修订；原冻结计划保留作来源，旧正文评分与语义核对不代表本轮正文通过。');
+    if (shot.videoPrompt !== undefined) lines.push('', '### 视频 Prompt', '', shot.videoPrompt);
+    lines.push('', '### 文本评分与证据', '', ...reviewLog(shot, plan.schemaVersion !== 2 || report?.shots?.find(row => row.id === shot.id)?.scoreValid === true));
+    if (shot.semanticReview) lines.push('', '### 独立语义核对', '', ...json(shot.semanticReview));
+  }
+  if (plan.calibration?.length) for (const sample of plan.calibration) lines.push('', `## 人工校准样本 ${sample.id}`, '', sample.text, '', ...reviewLog(sample), '', ...json(sample));
+  for (const [title, value] of [['硬校验记录', report], ['视频工作流与验收记录', context.workflow], ['生成清单与失败记录', context.manifest], ['人物资产记录', context.characterBundle], ['场景资产记录', context.sceneBundle]]) {
+    if (value) lines.push('', `## ${title}`, '', ...json(value));
   }
   return lines.join('\n') + '\n';
 }
@@ -157,8 +171,15 @@ export async function exportCharacterExcel(bundle, plan) {
 
 export function validateSceneBundle(bundle, plan) {
   const fail = message => { throw new ProjectError(message, 422); };
+  const text = (value, label) => { if (typeof value !== 'string' || !value.trim()) fail(`${label}须为非空文本`); };
+  const texts = (value, label, required = false) => {
+    if (!Array.isArray(value) || required && !value.length) fail(`${label}须为${required ? '非空' : ''}文本数组`);
+    value.forEach(item => text(item, label));
+  };
   const sourcePlanHash = plan.schemaVersion === 2 ? assetPlanHash(plan, 'locations') : promptHash(JSON.stringify(plan));
   if (bundle.schemaVersion !== 1 || bundle.projectId !== plan.projectId || bundle.sourcePlanHash !== sourcePlanHash) fail('场景Prompt与冻结项目版本不匹配，请核对后建立新版本');
+  if (bundle.designStageVersion !== undefined && bundle.designStageVersion !== 1) fail('场景美术设计版本无效');
+  const requiresDesign = bundle.designStageVersion === 1 || plan.schemaVersion === 2 && plan.rules?.files?.some(file => file.path === 'references/scene-art-direction.md');
   if (!Array.isArray(bundle.locations) || (plan.schemaVersion !== 2 && !bundle.locations.length)) fail('场景Prompt不能为空');
   const seen = new Set();
   for (const location of bundle.locations) {
@@ -167,8 +188,32 @@ export function validateSceneBundle(bundle, plan) {
     const base = location.base;
     if (base?.mode !== 'generate' || typeof base.text !== 'string' || !base.text.trim() || typeof base.basis !== 'string' || !base.basis.trim()) fail(plan.schemaVersion === 2 ? '场景资产须有Prompt与依据' : '场景三视图须有生成Prompt与依据');
     if (!Array.isArray(base.referenceIds) || base.referenceIds.length) fail(plan.schemaVersion === 2 ? '新建场景资产不绑定未生成的参考' : '新建场景三视图不绑定未生成的参考');
+    const design = location.sceneDesign;
+    if (design === undefined && !requiresDesign) continue;
+    if (!design || typeof design !== 'object' || Array.isArray(design)) fail(`${location.assetId}须有场景美术设计 sceneDesign`);
+    for (const key of ['useAndUsers', 'layout', 'useTraces', 'materials', 'composition']) text(design[key], `${location.assetId}.${key}`);
+    for (const key of ['scriptFacts', 'invariants']) texts(design[key], `${location.assetId}.${key}`, true);
+    for (const key of ['large', 'medium', 'small']) texts(design.furnishingLayers?.[key], `${location.assetId}.furnishingLayers.${key}`);
+    if (!Array.isArray(design.views) || !design.views.length) fail(`${location.assetId}.views须为非空数组`);
+    const shots = plan.shots.filter(shot => shot.locationId === location.assetId).map(shot => shot.id), used = new Set(), viewIds = new Set();
+    for (const view of design.views) {
+      for (const key of ['id', 'position', 'visible', 'keepClear']) text(view?.[key], `${location.assetId}.views.${key}`);
+      if (viewIds.has(view.id)) fail('场景机位ID重复'); viewIds.add(view.id);
+      texts(view.shotIds, `${location.assetId}.views.shotIds`, shots.length > 0);
+      for (const shotId of view.shotIds) {
+        if (!shots.includes(shotId) || used.has(shotId)) fail('场景机位须引用本场景真实镜号一次，不能跨场景或重复绑定');
+        used.add(shotId);
+      }
+    }
+    if (shots.some(shotId => !used.has(shotId))) fail('场景机位须覆盖本场景全部镜头');
+    if (!Array.isArray(design.constraintReview)) fail('场景约束核对须为数组');
+    for (const item of design.constraintReview) {
+      for (const key of ['original', 'source', 'reason']) text(item?.[key], `场景约束核对.${key}`);
+      if (!['retain', 'narrow', 'remove', 'replace'].includes(item.decision)) fail('场景约束处理方式无效');
+      if (['narrow', 'replace'].includes(item.decision) || item.replacement !== undefined) text(item.replacement, '场景约束替换内容');
+    }
   }
-  if (plan.schemaVersion === 2 && plan.productionInventory.locations.some(asset => !seen.has(asset.id))) fail('场景Prompt须覆盖全部已登记场景');
+  if ((plan.schemaVersion === 2 || requiresDesign) && plan.productionInventory.locations.some(asset => !seen.has(asset.id))) fail('场景Prompt须覆盖全部已登记场景');
   return bundle;
 }
 
@@ -187,77 +232,212 @@ export async function exportSceneExcel(bundle, plan) {
   return { filename: '场景资产Prompt.xlsx', buffer: Buffer.from(await workbook.xlsx.writeBuffer()) };
 }
 
-export async function exportVisualExcel(plan, project, totalSeconds, manifest = null, report = null) {
-  const version = plan.rubricVersion ?? rubricVersion, dimensions = dimensionsFor(version);
-  const workbook = createWorkbook(plan.title);
-  const v2 = plan.schemaVersion === 2 && plan.mode === 'visual-excel-v2';
-  const generationState = shot => {
-    if (shot.reuseOf) return `复用${shot.reuseOf}，不独立生成`;
-    const task = manifest?.tasks.find(item => item.phase === 'storyboards' && item.targetId === shot.id);
-    return task ? ({ planned: '未生成', submitted: '已提交，待结果', succeeded: '已生成', failed: '生成失败', unknown: '结果未知，待核对' }[task.status]) : '未生成';
-  };
-  const scores = v2 ? plan.shots.filter(shot => report?.shots.find(item => item.id === shot.id)?.scoreValid && currentReview(shot, version)) : plan.shots;
-  if (v2) {
-    const hasVideoPrompt = plan.shots.some(shot => shot.videoPrompt !== undefined);
-    const summary = readable(addSheet(workbook, '分镜总表', ['镜号', '秒数', '当前方案ID', '采用来源', '项目修订', '检查状态', '检查问题与修改要求', '自然语言Prompt', ...(hasVideoPrompt ? ['视频Prompt'] : []), 'Agent文本分（100）', '评分状态', '原稿来源', '原稿画面', '画面目的', ...dimensions.map(([, label]) => label), '动作与剪辑安排', '复用画面', '实际生成', 'Prompt哈希'], plan.shots.map(shot => {
-      const check = exportCheck(plan, shot, report), scored = scores.includes(shot);
-      return [shot.id, shot.seconds, shot.variantId, selectionText(shot), plan.revision, check.status, check.issues.map(issueText).join('\n\n'), shot.prompt.text, ...(hasVideoPrompt ? [shot.videoPrompt ?? null] : []),
-        scored ? reviewTotal(shot.review) : null, scored ? '有效文本评分' : shot.review ? '评分未验证或已失效，不计分' : '尚未评分',
-        sourcePosition(project, shot), joined(shot.sourceShotIds.map(id => project.shots.find(item => item.id === id)?.original ?? `缺少原稿：${id}`)), shot.intent,
-        ...dimensions.map(([key]) => shot.dimensions[key]), shot.motion, shot.reuseOf ?? '', generationState(shot), shot.prompt.textHash];
-    })));
-    summary.columns.forEach(column => { if (/^(自然语言Prompt|视频Prompt)/.test(column.header)) column.width = 112; });
-    summary.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }];
-  }
-  readable(addSheet(workbook, '阅读说明', ['项目', '内容'], [
-    ['交付', plan.title + (v2 ? '；首表为当前分镜总表，默认每镜一案。采用与检查通过均不表示用户确认。' : '；每镜一个方案，自然正文保持冻结版本。')],
-    ['总时长', `${totalSeconds}秒；${plan.spec.duration.basis}`],
-    ['文本评分', `Agent按${dimensions.length}个画面维度给出0–5分，按权重折算100分；不适用项有理由并归一化。分数不是出图成功率，也不代表用户评分。${v2 ? '缺失、失效或未验证的评分不显示分数。' : ''}`],
-    ['高低依据', '评分总览含色块和评分条；评分依据逐维给出对应Prompt原句及理由。低分不触发自动循环，重写建议与实际执行分开记录。'],
-    ['生成与参考', '本表为冻结文本。若有生成清单，实际生成与用户确认状态以该清单为准；参考须来自本次附件或本项目生成且经用户确认的资产。'],
-    ['人工校准', plan.calibration.length ? '单独的人工校准.xlsx可填写0–100总分和原因，尚未填写不推定用户标准。校准样本不替换正式分镜。' : '本次未要求人工校准，未另导出人工评分表，也没有代填用户评分。'],
-    ['规则', version + '；评价画面信息、可读性和连续性，不评价商业任务或受众。']
-  ]), { 1: 20, 2: 110 });
-  if (!v2) {
-    readable(addSheet(workbook, '分镜总表', ['镜号', '秒数', '原稿来源', '原稿画面', ...dimensions.map(([, label]) => label), '动作与剪辑安排', '复用画面'], plan.shots.map(shot => [
-    shot.id, shot.seconds, joined(shot.sourceShotIds), joined(shot.sourceShotIds.map(id => project.shots.find(item => item.id === id).original)),
-    ...dimensions.map(([key]) => shot.dimensions[key]), shot.motion, shot.reuseOf ?? ''
-  ])), { 1: 15, 2: 10, 3: 18, 4: 55 });
-  const prompts = readable(addSheet(workbook, '最终Prompt', ['镜号', '自然语言Prompt', 'Agent文本分（100）', '实际生成', 'Prompt哈希'], plan.shots.map(shot => [shot.id, shot.prompt.text, reviewTotal(shot.review), generationState(shot), shot.prompt.textHash])), { 1: 15, 2: 112, 3: 20, 4: 24, 5: 28 });
-  prompts.views = [{ state: 'frozen', xSplit: 1, ySplit: 1 }];
-  }
-  scoreSheets(workbook, scores, version);
-  readable(addSheet(workbook, '连续性', ['镜号', '前镜', '入镜状态', '出镜状态', '画面连接', '连续性核对', '复用画面'], plan.shots.map(shot => [shot.id, joined(shot.transition.fromShotIds), shot.transition.entry, shot.transition.exit, shot.transition.cut, shot.dimensions.continuity, shot.reuseOf ?? ''])), { 1: 15, 2: 18, 3: 60, 4: 60, 5: 60, 6: 60, 7: 18 });
-  readable(addSheet(workbook, '本次设定', ['类型', '名称', '画面设定', '依据'], [
-    ...plan.productionInventory.characters.map(item => ['角色', item.name, item.description, item.basis]),
-    ...plan.productionInventory.locations.map(item => ['场景', item.name, item.description, item.basis]),
-    ...plan.props.map(item => ['道具', item.name, item.description, '由本次画面规划登记']),
-    ['风格', '全片', plan.spec.style, '本次目标'],
-    ...plan.designNotes.map((note, index) => ['补全或调整', String(index + 1), note, '本次导演决定'])
-  ]), { 1: 18, 2: 26, 3: 100, 4: 65 });
+const uniqueText = values => [...new Set(values.filter(value => typeof value === 'string' && value.trim()))].join('\n');
+const timecode = seconds => {
+  const tenths = Math.round(seconds * 10), minutes = Math.floor(tenths / 600);
+  return String(minutes).padStart(2, '0') + ':' + (tenths % 600 / 10).toFixed(1).padStart(4, '0');
+};
 
-  const files = [{ filename: '画面分镜与评分.xlsx', buffer: Buffer.from(await workbook.xlsx.writeBuffer()) }];
-  if (plan.calibration.length) {
-    const calibration = createWorkbook(plan.title + ' · 人工校准');
-    readable(addSheet(calibration, '填写说明', ['项目', '内容'], [
-      ['填写位置', '在“人工评分”的黄色单元格填写用户总分（0–100）和原因；0分有效，可以只评部分样本。'],
-      ['样本范围', `${plan.calibration.length}条单独校准文本；不作为正式拍法选择，不改变正式方案。`],
-      ['评分对照', '评分总览和评分依据为Agent文本评审，供比较；用户未填写之前没有用户标准。'],
-      ['高分要求', '人物、动作、持物、视线、空间、光影及跨镜状态明确；措辞自然且保留原稿事实。可在原因中指出最影响使用的具体句子。'],
-      ['导入', '返回此文件后，只导入用户实际填写的总分和原因；冻结的ID、Prompt和背景不得修改。反馈独立保存，不自动改权重、不触发重新生成。'],
-      ['证据边界', '本表评价文本，不评价未生成图像。比较样本属于开发校准，不能证明其他剧本的泛化质量。']
-    ]), { 1: 20, 2: 112 });
-    const sheet = readable(addSheet(calibration, '人工评分', ['样本ID', '关联镜号', '样本', '完整Prompt', '画面背景', '用户总分（0–100）', '用户原因', 'Prompt哈希', '来源哈希', '项目ID'], plan.calibration.map(sample => [
-      sample.id, sample.shotId, sample.label, sample.text, calibrationBackground(plan, project, sample), null, null, sample.textHash, sample.sourceHash, plan.projectId
-    ])), { 1: 16, 2: 15, 3: 18, 4: 108, 5: 85, 6: 22, 7: 65, 8: 25, 9: 25, 10: 25 });
-    sheet.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }];
-    const column = label => sheet.getRow(1).values.indexOf(label);
-    for (let n = 2; n <= plan.calibration.length + 1; n++) {
-      for (const label of ['用户总分（0–100）', '用户原因']) { const cell = sheet.getRow(n).getCell(column(label)); cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2B2' } }; cell.protection = { locked: false }; }
-      sheet.getRow(n).getCell(column('用户总分（0–100）')).dataValidation = { type: 'decimal', operator: 'between', allowBlank: true, formulae: [0, 100], showErrorMessage: true, errorStyle: 'stop', errorTitle: '分数范围', error: '请填写0至100的数字。' };
+function deliverySheet(workbook, name, headers, rows, widths) {
+  const sheet = readable(addSheet(workbook, name, headers, rows), widths);
+  sheet.views = [{ state: 'frozen', xSplit: name === '分镜脚本' ? 1 : 2, ySplit: 1 }];
+  sheet.properties.tabColor = { argb: name === '分镜脚本' ? 'FF304C61' : 'FF9AAEBB' };
+  sheet.eachRow((row, rowNumber) => row.eachCell({ includeEmpty: true }, cell => {
+    cell.font = { ...cell.font, name: 'Microsoft YaHei', size: 11 };
+    cell.border = rowNumber === 1 ? {} : { bottom: { style: 'hair', color: { argb: 'FFDDE3E8' } } };
+    if (rowNumber === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF304C61' } };
+  }));
+  sheet.pageSetup.margins = { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.15 };
+  sheet.headerFooter = { oddHeader: '&L&"Microsoft YaHei,Bold"&16' + workbook.title, oddFooter: '&R&P / &N' };
+  return sheet;
+}
+
+export function promptParts(text, columnWidth = 112, maxLines = 20) {
+  const parts = []; let part = '';
+  for (const paragraph of text.replace(/\r\n?/g, '\n').match(/[^\n]+(?:\n+|$)|\n+/gu) ?? ['']) {
+    if (textLines(paragraph, columnWidth) > maxLines) throw new ProjectError('完整段落过长，无法在 Excel 行高上限内完整显示；请在自然段落边界补换行后重新导出，不会截断正文。', 422);
+    if (part && textLines(part + paragraph, columnWidth) > maxLines) { parts.push(part); part = ''; }
+    part += paragraph;
+  }
+  parts.push(part);
+  return parts;
+}
+
+function sceneDesignText(design) {
+  const layers = [['large', '大件'], ['medium', '中型收纳'], ['small', '日用品']].map(([key, label]) => `${label}：${design.furnishingLayers[key].join('；') || '不适用，见画面取舍'}`).join('\n');
+  return `脚本事实\n${design.scriptFacts.join('\n')}\n\n场景设计（脚本事实之外为导演补全）\n空间用途与使用者：${design.useAndUsers}\n\n核心布局：${design.layout}\n\n陈设层次\n${layers}\n\n使用痕迹：${design.useTraces}\n\n材质层次：${design.materials}\n\n画面取舍：${design.composition}`;
+}
+
+function localImage(directory, metadata) {
+  if (!directory || !metadata?.path) return null;
+  const root = fs.realpathSync(directory), filename = fs.realpathSync(path.resolve(directory, metadata.path));
+  const relative = path.relative(root, filename);
+  if (!relative || relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative)) throw new ProjectError('图片路径必须位于项目目录内', 422);
+  const buffer = fs.readFileSync(filename);
+  if (metadata.sha256 && promptHash(buffer) !== metadata.sha256) throw new ProjectError('图片哈希已变化，请重新检查后导出', 422);
+  let width, height, extension;
+  if (buffer.length >= 24 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    width = buffer.readUInt32BE(16); height = buffer.readUInt32BE(20); extension = 'png';
+  } else if (buffer.length >= 10 && /^GIF8[79]a$/.test(buffer.toString('ascii', 0, 6))) {
+    width = buffer.readUInt16LE(6); height = buffer.readUInt16LE(8); extension = 'gif';
+  } else if (buffer.length >= 4 && buffer.readUInt16BE(0) === 0xffd8) {
+    extension = 'jpeg';
+    for (let offset = 2; offset + 8 < buffer.length;) {
+      if (buffer[offset++] !== 0xff) continue;
+      while (buffer[offset] === 0xff) offset++;
+      const marker = buffer[offset++];
+      if (marker === 0xda || marker === 0xd9) break;
+      if (marker === 0x01 || marker >= 0xd0 && marker <= 0xd7) continue;
+      if (offset + 2 > buffer.length) break;
+      const length = buffer.readUInt16BE(offset);
+      if (length < 2 || offset + length > buffer.length) break;
+      if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+        height = buffer.readUInt16BE(offset + 3); width = buffer.readUInt16BE(offset + 5); break;
+      }
+      offset += length;
     }
-    for (const label of ['Prompt哈希', '来源哈希', '项目ID']) sheet.getColumn(column(label)).hidden = true;
-    scoreSheets(calibration, v2 ? plan.calibration.filter(sample => currentReview(sample, version)) : plan.calibration, version);
+  }
+  if (!width || !height) throw new ProjectError('图片无法读取尺寸；请提供有效的 PNG、JPEG 或 GIF', 422);
+  return { filename, buffer, extension, width, height };
+}
+
+function placeImage(workbook, sheet, rowNumber, column, image, caption = '') {
+  if (!image) return;
+  const width = Math.min(240, 480 * image.width / image.height), height = width * image.height / image.width;
+  const id = workbook.addImage({ buffer: image.buffer, extension: image.extension });
+  const row = sheet.getRow(rowNumber);
+  row.height = Math.max(row.height ?? 0, (height + 36) * 0.75);
+  // ExcelJS emits an invalid editAs attribute for tl+ext; two-cell anchors preserve valid OOXML and exact image pixels.
+  sheet.addImage(id, {
+    tl: { nativeCol: column - 1, nativeColOff: Math.round(4 * 9525), nativeRow: rowNumber - 1, nativeRowOff: Math.round(22 * 9525) },
+    br: { nativeCol: column - 1, nativeColOff: Math.round((width + 4) * 9525), nativeRow: rowNumber - 1, nativeRowOff: Math.round((height + 22) * 9525) },
+    editAs: 'oneCell'
+  });
+  row.getCell(column).value = { text: caption ? `${caption} · 查看原图` : '查看原图', hyperlink: pathToFileURL(image.filename).href };
+  row.getCell(column).font = { name: 'Microsoft YaHei', size: 11, color: { argb: 'FF375F81' }, underline: true };
+}
+
+function calibrationExcel(workbook, plan, project) {
+  readable(addSheet(workbook, '填写说明', ['项目', '内容'], [
+    ['填写位置', '在“人工评分”的黄色单元格填写用户总分（0–100）和原因；0分有效，可以只评部分样本。'],
+    ['样本范围', String(plan.calibration.length) + '条单独校准文本；不作为正式拍法选择，不改变正式方案。'],
+    ['导入', '只导入用户实际填写的总分和原因；冻结的ID、Prompt和背景不得修改。反馈独立保存，不自动改权重或重新生成。']
+  ]), { 1: 20, 2: 112 });
+  const sheet = readable(addSheet(workbook, '人工评分', ['样本ID', '关联镜号', '样本', '完整Prompt', '画面背景', '用户总分（0–100）', '用户原因', 'Prompt哈希', '来源哈希', '项目ID'], plan.calibration.map(sample => [
+    sample.id, sample.shotId, sample.label, sample.text, calibrationBackground(plan, project, sample), null, null, sample.textHash, sample.sourceHash, plan.projectId
+  ])), { 1: 16, 2: 15, 3: 18, 4: 108, 5: 85, 6: 22, 7: 65, 8: 25, 9: 25, 10: 25 });
+  sheet.views = [{ state: 'frozen', xSplit: 3, ySplit: 1 }];
+  const column = label => sheet.getRow(1).values.indexOf(label);
+  for (let n = 2; n <= plan.calibration.length + 1; n++) {
+    for (const label of ['用户总分（0–100）', '用户原因']) {
+      const cell = sheet.getRow(n).getCell(column(label));
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2B2' } }; cell.protection = { locked: false };
+    }
+    sheet.getRow(n).getCell(column('用户总分（0–100）')).dataValidation = { type: 'decimal', operator: 'between', allowBlank: true, formulae: [0, 100], showErrorMessage: true, errorStyle: 'stop', errorTitle: '分数范围', error: '请填写0至100的数字。' };
+  }
+  for (const label of ['Prompt哈希', '来源哈希', '项目ID']) sheet.getColumn(column(label)).hidden = true;
+}
+
+export async function exportVisualExcel(plan, project, totalSeconds, manifest = null, report = null, context = {}) {
+  const workflow = context.workflow, title = workflow?.title || plan.title;
+  const workbook = createWorkbook(title), images = workflow?.images ?? [], videos = workflow?.videoShots ?? [];
+  const characters = plan.productionInventory.characters, locations = plan.productionInventory.locations;
+  const byShot = new Map(videos.flatMap(video => video.shotIds.map(id => [id, video])));
+  const timeline = new Map((workflow?.timeline ?? []).map(row => [row.shotId, row]));
+  const assetImages = new Map((workflow?.assetImages ?? []).map(image => [image.assetId, image]));
+  const imageFor = (shot, visited = new Set()) => {
+    if (!shot || visited.has(shot.id)) return null;
+    visited.add(shot.id);
+    return images.find(image => image.shotId === shot.id) ?? (shot.reuseOf ? imageFor(plan.shots.find(item => item.id === shot.reuseOf), visited) : null);
+  };
+  let elapsed = 0;
+  const rows = plan.shots.map(shot => {
+    const video = byShot.get(shot.id), duration = timeline.get(shot.id)?.seconds ?? shot.seconds;
+    if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) throw new ProjectError('镜头时长须为非负秒数', 422);
+    const start = elapsed; elapsed = Math.round((elapsed + duration) * 1000) / 1000;
+    const sources = shot.sourceShotIds.map(id => project.shots.find(source => source.id === id)).filter(Boolean);
+    const dialogue = uniqueText(sources.flatMap(source => (source.originalFields ?? []).filter(field => /台词|对白|旁白|音效|声音/.test(field.name)).map(field => field.value)));
+    const location = locations.find(item => item.id === shot.locationId)?.name ?? '';
+    const names = shot.shotSchema.subjects.map(subject => characters.find(item => item.id === subject.assetId)?.name).filter(Boolean);
+    const image = imageFor(shot);
+    const content = timeline.get(shot.id)?.description ?? (video ? video.shotIds[0] === shot.id ? uniqueText([video.startState, video.action, video.endState]) : video.endState : shot.dimensions.moment || sources.map(source => source.original).join('\n') || shot.motion);
+    const notes = uniqueText([shot.reuseOf ? '复用 ' + shot.reuseOf + ' 画面' : '', image?.productionNote ?? (image?.review?.status === 'needs-change' ? '参考图待修正，详见制作日志' : '')]);
+    return [shot.id, timecode(start) + '–' + timecode(elapsed), duration, uniqueText([location, names.join('、')]), image ? null : '待补图',
+      content, video ? uniqueText([video.dialogue, video.sound]) || dialogue : dialogue,
+      uniqueText([video?.camera ?? shot.dimensions.camera, shot.dimensions.optics]), notes, null];
+  });
+  const summary = deliverySheet(workbook, '分镜脚本', ['镜号', '起止时间', '时长（秒）', '场景与人物', '分镜图', '画面与动作', '对白与声音', '摄影与运镜', '衔接备注', '用户意见'], rows,
+    { 1: 9, 2: 18, 3: 10, 4: 20, 5: 35, 6: 38, 7: 28, 8: 28, 9: 30, 10: 24 });
+  const promptRows = [], targets = new Map(), deliveryGroups = [];
+  const appendPrompt = (type, name, text, shotId, entityId = name) => {
+    if (typeof text !== 'string' || !text.length) return;
+    if (shotId && !targets.has(shotId)) targets.set(shotId, promptRows.length + 2);
+    const start = promptRows.length + 2;
+    promptParts(text).forEach((part, index) => promptRows.push([index ? type + '（续' + (index + 1) + '）' : type, name, part]));
+    deliveryGroups.push({ id: `prompt/${type}/${entityId}`, kind: 'prompt', sheet: '生成Prompt',
+      rows: Array.from({ length: promptRows.length + 2 - start }, (_, index) => start + index),
+      values: [type, name, text.replace(/\r\n?/g, '\n')], textColumn: 3 });
+  };
+  appendPrompt('全片视频参数', '全片', workflow?.generationSettings);
+  appendPrompt('音乐', '全片', workflow?.musicPrompt);
+  for (const shot of plan.shots) {
+    appendPrompt('静帧', shot.id, workflow?.shotPrompts?.find(item => item.shotId === shot.id)?.text ?? shot.prompt.text, shot.id);
+    if (shot.videoPrompt !== undefined) appendPrompt('视频', shot.id, shot.videoPrompt, shot.id);
+  }
+  for (const video of videos) {
+    if (video.videoPrompt && !video.shotIds.every(id => plan.shots.find(shot => shot.id === id)?.videoPrompt === video.videoPrompt)) appendPrompt('视频', video.shotIds.join(' / '), video.videoPrompt, video.shotIds[0]);
+    appendPrompt('视频参数', video.shotIds.join(' / '), video.generationParameters);
+  }
+  for (const character of context.characterBundle?.characters ?? []) appendPrompt('人物', characters.find(item => item.id === character.assetId)?.name ?? '', character.base.text, undefined, character.assetId);
+  for (const location of context.sceneBundle?.locations ?? []) appendPrompt('场景', locations.find(item => item.id === location.assetId)?.name ?? '', location.base.text, undefined, location.assetId);
+  const prompts = deliverySheet(workbook, '生成Prompt', ['类型', '对应镜号或名称', '完整Prompt'], promptRows, { 1: 18, 2: 24, 3: 112 });
+  const assets = [...characters.map(asset => ({ ...asset, type: '人物' })), ...locations.map(asset => ({ ...asset, type: '场景' }))];
+  const assetShots = asset => plan.shots.filter(shot => asset.type === '人物' ? shot.shotSchema.subjects.some(subject => subject.assetId === asset.id) : shot.locationId === asset.id);
+  const settingEntries = assets.flatMap(asset => {
+    const design = asset.type === '场景' ? context.sceneBundle?.locations.find(location => location.assetId === asset.id)?.sceneDesign : null;
+    const text = design ? sceneDesignText(design) : assetImages.get(asset.id)?.description ?? asset.description;
+    return promptParts(text, 78).map((part, index) => ({ asset, first: index === 0, row: [asset.name + (index ? '（续）' : ''), asset.type, index ? null : '待补图', part, assetShots(asset).map(shot => shot.id).join('、')] }));
+  });
+  const settings = deliverySheet(workbook, '人物与场景', ['名称', '类型', '参考图', '造型或空间设定', '使用镜头'], settingEntries.map(entry => entry.row), { 1: 22, 2: 12, 3: 36, 4: 78, 5: 30 });
+  for (const [index, shot] of plan.shots.entries()) {
+    const row = summary.getRow(index + 2);
+    for (let col = 1; col <= 10; col++) row.getCell(col).protection = { locked: col !== 10 };
+    row.getCell(10).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF4CE' } };
+    row.height = Math.max(119, row.height);
+    if (targets.has(shot.id)) row.getCell(1).value = { text: shot.id, hyperlink: "#'生成Prompt'!C" + targets.get(shot.id) };
+    placeImage(workbook, summary, index + 2, 5, localImage(context.directory, imageFor(shot)));
+  }
+  for (let index = 0; index < promptRows.length; index++) {
+    const name = promptRows[index][1], shot = plan.shots.find(item => name.split(' / ').includes(item.id));
+    if (shot) prompts.getRow(index + 2).getCell(2).value = { text: name, hyperlink: "#'分镜脚本'!A" + (plan.shots.indexOf(shot) + 2) };
+  }
+  for (const [index, { asset, first }] of settingEntries.entries()) {
+    const image = assetImages.get(asset.id);
+    if (first) placeImage(workbook, settings, index + 2, 3, localImage(context.directory, image), image?.caption);
+    const shots = assetShots(asset);
+    if (shots.length) settings.getRow(index + 2).getCell(5).value = { text: shots.map(shot => shot.id).join('、'), hyperlink: "#'分镜脚本'!A" + (plan.shots.indexOf(shots[0]) + 2) };
+  }
+  await summary.protect('', { selectLockedCells: true, selectUnlockedCells: true, autoFilter: true });
+  const safeTitle = Array.from(String(title || '分镜项目').replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim().replace(/[. ]+$/g, '')).slice(0, 80).join('') || '分镜项目';
+  const cellValue = cell => cell.value === null ? null : typeof cell.value === 'object' ? cell.text : cell.value;
+  for (const [index, shot] of plan.shots.entries()) deliveryGroups.push({
+    id: `shot/${shot.id}`, kind: 'row', sheet: '分镜脚本', rows: [index + 2],
+    values: Array.from({ length: 9 }, (_, column) => cellValue(summary.getCell(index + 2, column + 1)))
+  });
+  for (const asset of assets) {
+    const entries = settingEntries.flatMap((entry, index) => entry.asset.id === asset.id ? [index + 2] : []);
+    const values = Array.from({ length: 5 }, (_, column) => cellValue(settings.getCell(entries[0], column + 1)));
+    values[3] = entries.map(row => settings.getCell(row, 4).text).join('');
+    deliveryGroups.push({ id: `asset/${asset.type}/${asset.id}`, kind: 'asset', sheet: '人物与场景', rows: entries, values, textColumn: 4 });
+  }
+  const deliveryData = { schemaVersion: 1, projectId: plan.projectId, groups: deliveryGroups,
+    sheets: [summary, prompts, settings].map(sheet => ({ name: sheet.name, rows: sheet.rowCount, columns: sheet.columnCount,
+      headers: Array.from({ length: sheet.columnCount }, (_, column) => cellValue(sheet.getCell(1, column + 1))) })),
+    mediaHashes: (workbook.model.media ?? []).map(item => promptHash(item.buffer))
+  };
+  const files = [{ filename: safeTitle + '_分镜脚本.xlsx', buffer: Buffer.from(await workbook.xlsx.writeBuffer()), deliveryData }];
+  if (context.calibration === true && plan.calibration?.length) {
+    const calibration = createWorkbook(title + ' · 人工校准'); calibrationExcel(calibration, plan, project);
     files.push({ filename: '人工校准.xlsx', buffer: Buffer.from(await calibration.xlsx.writeBuffer()) });
   }
   return files;

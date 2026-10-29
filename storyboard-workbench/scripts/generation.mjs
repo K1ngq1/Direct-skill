@@ -1,16 +1,69 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
 import { ProjectError } from './project.mjs';
 import { promptHash, validateVisualPlan, validateLocalImage } from './visual.mjs';
 import { validateCharacterBundle, validateSceneBundle } from './export_visual_excel.mjs';
+import { mediaBatchHostSource } from './media_batch.mjs';
+export { runConcurrentJobs, runMediaBatch, runMediaBatchAndSummarize, runMediaPipeline, createMediaBatchController, mediaBatchHostSource } from './media_batch.mjs';
+export { createGenerationBatchStore, createGenerationPipelineStore } from './generation_batch_store.mjs';
 
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const fail = message => { throw new ProjectError(message, 422); };
 const sameIds = (left, right) => left.length === right.length && left.every(id => right.includes(id));
 
+export async function auditGenerationTranscript(filename, turnId) {
+  const lines = createInterface({ input: fs.createReadStream(filename, { encoding: 'utf8' }), crlfDelay: Infinity });
+  let selected, active = false, lineNumber = 0;
+  try {
+    for await (const line of lines) {
+      lineNumber++;
+      if (!line.trim()) continue;
+      let row;
+      try { row = JSON.parse(line); } catch { fail(`会话JSONL第${lineNumber}行无法解析`); }
+      if (row.type !== 'event_msg') continue;
+      const event = row.payload;
+      if (event?.type === 'task_started') {
+        active = !turnId || event.turn_id === turnId;
+        if (active) selected = { turnId: event.turn_id, startedAt: row.timestamp, finishedAt: null, intervals: new Map() };
+      }
+      if (!active || !selected) continue;
+      if (['task_complete', 'turn_aborted'].includes(event.type)) selected.finishedAt = row.timestamp;
+      if (event.type !== 'item_completed' || event.item?.type !== 'Extension' || event.item.kind !== 'image_gen.generation') continue;
+      const { started_at_ms: start, completed_at_ms: end } = event;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start || typeof event.item.id !== 'string') fail(`生图执行区间无效，第${lineNumber}行`);
+      const interval = { id: event.item.id, start, end };
+      const old = selected.intervals.get(interval.id);
+      if (old && (old.start !== start || old.end !== end)) fail('同一生图工具ID存在冲突时间');
+      selected.intervals.set(interval.id, interval);
+    }
+  } finally { lines.close(); }
+  if (!selected) fail('未找到指定任务的开始记录');
+  const intervals = [...selected.intervals.values()].sort((a, b) => a.start - b.start);
+  const points = intervals.filter(x => x.end > x.start).flatMap(x => [[x.start, 1], [x.end, -1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let current = 0, peak = 0;
+  for (const [, change] of points) { current += change; peak = Math.max(peak, current); }
+  return {
+    turnId: selected.turnId, startedAt: selected.startedAt, finishedAt: selected.finishedAt,
+    toolExecutionSamples: intervals.length, observedToolExecutionPeak: intervals.length ? peak : null,
+    executionEvidence: intervals.length ? 'host-extension-events' : 'unobserved', serverExecutionPeak: null,
+    toolExecutionTotalMs: intervals.reduce((total, x) => total + x.end - x.start, 0),
+    intervals: intervals.map(x => ({ id: x.id, startedAt: new Date(x.start).toISOString(), finishedAt: new Date(x.end).toISOString(), durationMs: x.end - x.start }))
+  };
+}
+
+
 export function validateGenerationManifest(directory, manifest = read(path.join(directory, 'generation-manifest.json'))) {
-  const { plan, project } = validateVisualPlan(directory, undefined, { generationManifest: manifest });
+  return validateGenerationProject(directory, manifest).generation;
+}
+
+export function validateGenerationProject(directory, manifest = read(path.join(directory, 'generation-manifest.json'))) {
+  const checked = validateVisualPlan(directory, undefined, { generationManifest: manifest });
+  return { ...checked, generation: inspectGenerationManifest(directory, manifest, checked) };
+}
+
+function inspectGenerationManifest(directory, manifest, { plan, project }) {
   if (manifest.schemaVersion !== 1 || manifest.projectId !== plan.projectId || manifest.sourcePlanHash !== promptHash(JSON.stringify(plan))) fail('生成清单与冻结项目版本不匹配');
   if (!Array.isArray(manifest.tasks)) fail('生成任务须为数组');
   const characters = validateCharacterBundle(read(path.join(directory, 'character-prompts.json')), plan).characters;
@@ -81,8 +134,10 @@ export function validateGenerationManifest(directory, manifest = read(path.join(
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const [command, directory] = process.argv.slice(2);
-    if (command !== 'validate' || !directory) fail('用法：generation.mjs validate <project>');
+    const [command, directory, turnId] = process.argv.slice(2);
+    if (command === 'host-source') { console.log(mediaBatchHostSource()); process.exit(0); }
+    if (command === 'audit-execution' && directory) { console.log(JSON.stringify(await auditGenerationTranscript(directory, turnId), null, 2)); process.exit(0); }
+    if (command !== 'validate' || !directory) fail('用法：generation.mjs validate <project> | audit-execution <rollout.jsonl> [turnId]');
     const { assetTasks, storyboardTasks } = validateGenerationManifest(directory);
     console.log(JSON.stringify({ status: 'valid', assetTasks, storyboardTasks }, null, 2));
   } catch (error) { console.error(error.message); process.exitCode = 1; }

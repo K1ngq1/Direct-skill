@@ -1,5 +1,7 @@
 # Direct-skill 首版实施与验证记录
 
+后续说明（2026-10-29）：本文保留原实施时间与当次结果；当前表达规则、prompt/review 装载约定及单模型对照结论见[表达规则实施与验证边界](PROMPT-LANGUAGE-VERIFICATION.md)。后续结果不追溯改写本文历史验收。
+
 记录日期：2026-10-19。本版在现有 `storyboard-workbench` 中增加多 Agent 适配，保留导入、导演规划、自然 Prompt、校验、修订和 Excel 导出链路。默认交付 Excel；JSON 和检查记录用于内部生产，不新增网页服务或模型 API 服务。
 
 本文说明可公开的实现与验证边界，不包含用户原稿、真实生产项目、个人路径、密钥或私有评价。安装和日常命令以[主 README](../README.md)及 [Skill](../storyboard-workbench/SKILL.md)为入口。

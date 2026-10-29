@@ -12,8 +12,12 @@ description: Use this project's shared storyboard workflow to turn a script into
 ```text
 node "storyboard-workbench/scripts/runtime.mjs" doctor
 node "storyboard-workbench/scripts/runtime.mjs" rules ingest --adapter claude-code
+node "storyboard-workbench/scripts/runtime.mjs" rules prompt --adapter claude-code
+node "storyboard-workbench/scripts/runtime.mjs" rules review --adapter claude-code
 ```
 
 模型规则按实际配置选择，例如 `--model glm`。无法读取文件或执行脚本时报告实际缺失能力；未执行程序校验须明确标注“未执行硬校验”。本入口不配置模型或 API，不授权额外生成、收费调用或批量评测。
 
 图片理解与工具调用能力取决于用户当前模型和宿主实际支持；不能因使用 GLM、Claude Code 或本入口，就宣称已理解附件或支持多模态。
+
+创作与独立核对均按对应阶段读取[共用表达规则](../../../storyboard-workbench/references/prompt-language.md#四步表达核对)，具体要求只在共用文件维护。上述命令沿用默认模型；实际已知时按适配说明追加 --model。

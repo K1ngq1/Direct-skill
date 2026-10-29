@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from '../scripts/vendor/exceljs.cjs';
@@ -10,9 +9,28 @@ import { exportCharacterExcel } from '../scripts/export_visual_excel.mjs';
 import { sealPlan, validateVisualPlan, exportVisualProject, importFeedback, promptHash, dimensions, dimensionsFor, currentRubricVersion, reviewTotal } from '../scripts/visual.mjs';
 
 const save = (file, data) => fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+const calibratedFiles = async directory => {
+  const files = await exportVisualProject(directory, { calibration: true });
+  return [files.find(filename => filename.endsWith('_分镜脚本.xlsx')), files.find(filename => path.basename(filename) === '人工校准.xlsx')];
+};
 const review = text => ({ promptHash: promptHash(text), reviewer: 'test-reviewer', rubricVersion: 'visual-v1', scores: dimensions.map(([dimension]) => ({ dimension, score: 4, evidence: '一人', reason: '测试评分证据。' })), strengths: ['主体明确'], weaknesses: ['仅文本校验'], rewrite: { needed: false, reason: '保留当前一稿。', executed: false } });
 function fixture() {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visual-contract-'));
+  // The Windows sandbox temp volume denies rename; keep atomic delivery fixtures in the writable workspace.
+  const testRoot = path.dirname(fileURLToPath(import.meta.url)), directory = fs.mkdtempSync(path.join(testRoot, 'visual-contract-'));
+  test.after(() => {
+    const root = fs.realpathSync(directory), relative = path.relative(fs.realpathSync(testRoot), root);
+    assert.ok(relative.startsWith('visual-contract-') && !relative.includes(path.sep));
+    const folders = [root], files = [];
+    for (const folder of folders) for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      assert.equal(entry.isSymbolicLink(), false, '隔离夹具不得通过链接清理外部文件');
+      const filename = path.join(folder, entry.name), owned = path.relative(root, fs.realpathSync(filename));
+      assert.ok(owned && !owned.startsWith('..') && !path.isAbsolute(owned));
+      if (entry.isDirectory()) folders.push(filename);
+      else { assert.ok(entry.isFile()); files.push(filename); }
+    }
+    for (const filename of files) fs.unlinkSync(filename);
+    for (const folder of folders.reverse()) fs.rmdirSync(folder);
+  });
   fs.mkdirSync(path.join(directory, 'sources'));
   const source = Buffer.from('isolated-source-bytes');
   fs.writeFileSync(path.join(directory, 'sources/source.xlsx'), source);
@@ -44,12 +62,12 @@ test('character assets export separately; dormant details never enter base or sh
   const { directory, plan } = complete(), before = fs.readFileSync(path.join(directory, 'visual-plan.json'));
   const bundle = characterBundle(plan); save(path.join(directory, 'character-prompts.json'), bundle);
   const files = await exportVisualProject(directory);
-  assert.equal(files.length, 3);
-  const characters = new ExcelJS.Workbook(); await characters.xlsx.load(fs.readFileSync(files[2]));
+  assert.equal(files.filter(filename => filename.endsWith('.xlsx')).length, 1);
+  const characters = new ExcelJS.Workbook(); await characters.xlsx.load((await exportCharacterExcel(bundle, plan)).buffer);
   assert.equal(characters.getWorksheet('基础人物Prompt').getCell('D2').value, bundle.characters[0].base.text);
   assert.equal(characters.getWorksheet('基础人物Prompt').getCell('E2').value, null);
   assert.equal(characters.getWorksheet('可选细节编辑Prompt').getCell('E2').value, bundle.characters[0].optionalDetails[0].template);
-  for (const filename of files.slice(0, 2)) {
+  for (const filename of files.filter(filename => filename.endsWith('.xlsx'))) {
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(fs.readFileSync(filename));
     workbook.eachSheet(sheet => sheet.eachRow(row => row.eachCell(cell => {
       assert.ok(!String(cell.value).includes('LEFT_CHEEK_MOLE'));
@@ -117,7 +135,9 @@ test('fresh CLI processes seal, validate and export without circular top-level-a
   assert.equal(run('validate', directory).status, 'valid');
   const output = run('export', directory);
   assert.equal(output.files.length, 2);
-  for (const filename of output.files) assert.equal(fs.readFileSync(filename).subarray(0, 2).toString(), 'PK');
+  assert.equal(output.files.filter(filename => filename.endsWith('.xlsx')).length, 1);
+  assert.ok(output.files.some(filename => filename.endsWith('.md')));
+  assert.equal(fs.readFileSync(output.files.find(filename => filename.endsWith('.xlsx'))).subarray(0, 2).toString(), 'PK');
 });
 
 test('source bytes, archived facts, structure and frozen prose changes are all detected', () => {
@@ -170,7 +190,7 @@ test('reviews require exact evidence, current Prompt hash and ten dimensions; N/
   assert.throws(() => validateVisualPlan(directory, changed), /评分理由/);
 });
 
-test('v2 requires optics, scores eleven dimensions and exports the full heatmap and feedback version', async () => {
+test('v2 retains optics and eleven-dimension backend scores while explicit human feedback keeps its version', async () => {
   const { directory, plan } = fixture();
   plan.rubricVersion = currentRubricVersion;
   const rules = dimensionsFor(plan.rubricVersion), shot = plan.shots[0];
@@ -191,14 +211,13 @@ test('v2 requires optics, scores eleven dimensions and exports the full heatmap 
   assert.throws(() => validateVisualPlan(directory, mixed), /评分规则版本/);
   const changed = structuredClone(sealed); changed.rubricVersion = 'visual-v1';
   assert.throws(() => validateVisualPlan(directory, changed), /冻结失效/);
-  const files = await exportVisualProject(directory), workbook = new ExcelJS.Workbook();
+  const files = await calibratedFiles(directory), workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fs.readFileSync(files[0]));
-  assert.ok(workbook.getWorksheet('分镜总表').getRow(1).values.includes('摄影约束（焦距、光圈与对焦）'));
-  assert.equal(workbook.getWorksheet('最终Prompt').getCell('B2').value, shot.prompt.text);
-  assert.equal(workbook.getWorksheet('评分总览').getCell('B2').value, 77);
-  assert.equal(workbook.getWorksheet('评分总览').getCell('O1').value, '处理建议');
-  assert.equal(workbook.getWorksheet('评分总览').conditionalFormattings[1].ref, 'D2:N2');
-  assert.equal(workbook.getWorksheet('评分依据').rowCount, 12);
+  assert.match(workbook.getWorksheet('分镜脚本').getCell('H2').value, /50mm.*f\/2\.8/);
+  assert.equal(workbook.getWorksheet('生成Prompt').getCell('C2').value, shot.prompt.text);
+  assert.equal(workbook.getWorksheet('评分总览'), undefined);
+  const log = fs.readFileSync(path.join(path.dirname(files[0]), '制作日志.md'), 'utf8');
+  assert.match(log, /有效文本评分：77/); assert.match(log, /摄影约束/);
   const calibration = new ExcelJS.Workbook(); await calibration.xlsx.load(fs.readFileSync(files[1]));
   assert.match(calibration.getWorksheet('人工评分').getCell('E2').value, /摄影约束.*50mm/);
   calibration.getWorksheet('人工评分').getCell('F2').value = 80;
@@ -207,15 +226,14 @@ test('v2 requires optics, scores eleven dimensions and exports the full heatmap 
   assert.equal(feedback.rubricVersion, 'visual-v2');
 });
 
-test('Excel keeps literal prose, displays score heatmap and bars, leaves human ratings empty', async () => {
+test('Excel keeps literal prose and clean production sheets while human ratings remain empty', async () => {
   const { directory, plan } = complete();
   const before = fs.readFileSync(path.join(directory, 'visual-plan.json'));
-  const files = await exportVisualProject(directory);
+  const files = await calibratedFiles(directory);
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(fs.readFileSync(files[0]));
-  assert.equal(workbook.getWorksheet('最终Prompt').getCell('B2').value, plan.shots[0].prompt.text);
-  assert.equal(workbook.getWorksheet('评分总览').getCell('B2').value, 80);
-  assert.equal(workbook.getWorksheet('评分总览').conditionalFormattings.length, 2);
-  assert.ok(workbook.getWorksheet('评分总览').getCell('C2').value.includes('█'));
+  assert.equal(workbook.getWorksheet('生成Prompt').getCell('C2').value, plan.shots[0].prompt.text);
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['分镜脚本', '生成Prompt', '人物与场景']);
+  assert.ok(workbook.worksheets.every(sheet => sheet.conditionalFormattings.length === 0));
   const all = []; workbook.eachSheet(sheet => sheet.eachRow(row => row.eachCell(cell => all.push(cell.value))));
   assert.ok(!all.includes(plan.spec.resolution));
   const calibration = new ExcelJS.Workbook(); await calibration.xlsx.load(fs.readFileSync(files[1]));
@@ -249,9 +267,8 @@ test('confirmed image references preserve concise prose, acting and scene change
   save(path.join(directory, 'visual-plan.json'), sealed);
   const [filename] = await exportVisualProject(directory);
   const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(fs.readFileSync(filename));
-  assert.equal(workbook.getWorksheet('最终Prompt').getCell('B2').value, shot.prompt.text);
-  assert.equal(workbook.getWorksheet('分镜总表').getCell('F2').value, shot.dimensions.appearance);
-  assert.equal(workbook.getWorksheet('分镜总表').getCell('L2').value, shot.dimensions.scene);
+  assert.equal(workbook.getWorksheet('生成Prompt').getCell('C2').value, shot.prompt.text);
+  assert.equal(workbook.getWorksheet('人物与场景').getCell('D2').value, plan.productionInventory.characters[0].description);
   const frozen = JSON.parse(fs.readFileSync(path.join(directory, 'visual-plan.json'), 'utf8'));
   assert.deepEqual(frozen.shots[0].shotSchema.subjects[0].referenceIds, ['R_CHARACTER']);
   assert.deepEqual(frozen.shots[0].shotSchema.referenceIds, ['R_SCENE']);
@@ -262,7 +279,7 @@ test('confirmed image references preserve concise prose, acting and scene change
 
 test('feedback imports an actual zero score independently, preserves source plan and deduplicates', async () => {
   const { directory } = complete();
-  const files = await exportVisualProject(directory), workbook = new ExcelJS.Workbook();
+  const files = await calibratedFiles(directory), workbook = new ExcelJS.Workbook();
   await assert.rejects(importFeedback(directory, files[1]), /未填写/);
   await workbook.xlsx.load(fs.readFileSync(files[1]));
   workbook.getWorksheet('人工评分').getCell('F2').value = 0;
@@ -276,7 +293,7 @@ test('feedback imports an actual zero score independently, preserves source plan
 });
 
 test('feedback rejects formula scores, unknown IDs and frozen Prompt/background edits', async () => {
-  const { directory } = complete(), files = await exportVisualProject(directory);
+  const { directory } = complete(), files = await calibratedFiles(directory);
   for (const [cell, value, error] of [['F2', { formula: '100', result: 100 }, /公式/], ['A2', 'UNKNOWN', /未知/], ['D2', '换成另一份文字', /被改动/], ['E2', '换背景', /被改动/], ['F2', 101, /0至100/]]) {
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(fs.readFileSync(files[1]));
     workbook.getWorksheet('人工评分').getCell('F2').value = 80;
@@ -294,20 +311,21 @@ test('uncovered source rows and duplicate sample IDs cannot be silently accepted
   project.shots.pop(); save(path.join(directory, 'project.json'), project);
   plan.calibration.push({ ...structuredClone(plan.calibration[0]), id: 'C02', label: '样本B' });
   save(path.join(directory, 'visual-plan.json'), plan);
-  const files = await exportVisualProject(directory), workbook = new ExcelJS.Workbook();
+  const files = await calibratedFiles(directory), workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fs.readFileSync(files[1]));
   workbook.getWorksheet('人工评分').getCell('A3').value = 'C01';
   const filename = path.join(directory, 'duplicate.xlsx'); fs.writeFileSync(filename, Buffer.from(await workbook.xlsx.writeBuffer()));
   await assert.rejects(importFeedback(directory, filename), /重复/);
 });
 
-test('re-export refuses to erase a filled human rating, including zero', async () => {
-  const { directory } = complete(), files = await exportVisualProject(directory), workbook = new ExcelJS.Workbook();
+test('legacy re-export creates a new delivery and never erases a filled human rating, including zero', async () => {
+  const { directory } = complete(), files = await calibratedFiles(directory), workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fs.readFileSync(files[1]));
   workbook.getWorksheet('人工评分').getCell('F2').value = 0;
   fs.writeFileSync(files[1], Buffer.from(await workbook.xlsx.writeBuffer()));
   const before = fs.readFileSync(files[1]);
-  await assert.rejects(exportVisualProject(directory), /拒绝覆盖/);
+  const next = await calibratedFiles(directory);
+  assert.notEqual(path.dirname(next[1]), path.dirname(files[1]));
   assert.deepEqual(fs.readFileSync(files[1]), before);
 });
 
@@ -318,7 +336,7 @@ test('long calibration text uses continuation columns and still imports the exac
   sealed.shots[0].review = review(sealed.shots[0].prompt.text);
   sealed.calibration[0].review = review(sealed.calibration[0].text);
   save(path.join(directory, 'visual-plan.json'), sealed);
-  const files = await exportVisualProject(directory), workbook = new ExcelJS.Workbook();
+  const files = await calibratedFiles(directory), workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fs.readFileSync(files[1]));
   const sheet = workbook.getWorksheet('人工评分'), scoreColumn = sheet.getRow(1).values.indexOf('用户总分（0–100）');
   assert.ok(sheet.getRow(1).values.includes('完整Prompt（续2）'));

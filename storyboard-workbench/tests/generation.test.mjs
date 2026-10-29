@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from '../scripts/vendor/exceljs.cjs';
@@ -11,12 +10,23 @@ import { validateGenerationManifest } from '../scripts/generation.mjs';
 
 const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
 function fixture(t) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'generation-contract-'));
+  // The Windows sandbox temp volume denies rename; atomic delivery needs the writable workspace.
+  const directory = fs.mkdtempSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'generation-contract-'));
+  const exportedFiles = new Set(), exportFolders = new Set();
   t.after(() => {
     const remove = file => { const target = path.join(directory, file); if (fs.existsSync(target)) fs.unlinkSync(target); };
-    remove('exports/画面分镜与评分.xlsx');
-    remove('exports/人物资产Prompt.xlsx');
-    remove('exports/场景资产Prompt.xlsx');
+    for (const relative of ['excel-delivery/records', 'excel-delivery/snapshots']) {
+      const folder = path.join(directory, relative);
+      if (fs.existsSync(folder)) {
+        for (const name of fs.readdirSync(folder)) exportedFiles.add(path.join(folder, name));
+        exportFolders.add(folder); exportFolders.add(path.dirname(folder));
+      }
+    }
+    remove('excel-delivery.json');
+    remove('excel-delivery.lock');
+    remove('excel-delivery.pending.json');
+    for (const filename of exportedFiles) if (fs.existsSync(filename)) fs.unlinkSync(filename);
+    for (const folder of [...exportFolders].sort((a, b) => b.length - a.length)) if (fs.existsSync(folder)) fs.rmdirSync(folder);
     remove('images/T_PERSON.png');
     remove('images/T_ROOM.png');
     if (fs.existsSync(path.join(directory, 'exports'))) fs.rmdirSync(path.join(directory, 'exports'));
@@ -64,20 +74,56 @@ function fixture(t) {
     persist();
   };
   persist();
-  return { directory, plan, project, characters, locations, manifest, persist, approveAssets };
+  const exportFiles = async options => {
+    const files = await exportVisualProject(directory, options);
+    for (const filename of files) {
+      assert.ok(path.relative(directory, filename) && !path.relative(directory, filename).startsWith('..'));
+      exportedFiles.add(filename); exportFolders.add(path.dirname(filename));
+    }
+    return files;
+  };
+  return { directory, plan, project, characters, locations, manifest, persist, approveAssets, exportFiles };
 }
 
-test('planned manifest validates exact assets and independent shots; scene workbook preserves its text', async t => {
-  const { directory, manifest, locations } = fixture(t);
+test('planned manifest validates exact assets and independent shots; script workbook preserves scene prose', async t => {
+  const { directory, manifest, locations, exportFiles } = fixture(t);
   assert.deepEqual(Object.fromEntries(Object.entries(validateGenerationManifest(directory)).filter(([key]) => key !== 'manifest')), { assetTasks: 2, storyboardTasks: 1 });
-  const files = await exportVisualProject(directory);
-  assert.equal(files.length, 3);
-  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('场景资产Prompt.xlsx'))));
-  assert.equal(workbook.getWorksheet('场景三视图Prompt').getCell('C2').value, locations.locations[0].base.text);
+  const files = await exportFiles();
+  assert.equal(files.length, 2);
+  assert.equal(files.filter(file => file.endsWith('.xlsx')).length, 1);
+  assert.ok(files.filter(file => file.endsWith('.xlsx')).every(file => path.dirname(file) === path.join(directory, 'exports', 'delivery-000001')));
+  assert.ok(files.filter(file => file.endsWith('.md')).every(file => path.dirname(file) === path.join(directory, 'excel-delivery', 'records')));
+  const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('_分镜脚本.xlsx'))));
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['分镜脚本', '生成Prompt', '人物与场景']);
+  const sceneRows = [];
+  workbook.getWorksheet('生成Prompt').eachRow(row => { if (row.getCell(1).text === '场景') sceneRows.push(row.getCell(3).text); });
+  assert.deepEqual(sceneRows, [locations.locations[0].base.text]);
+  const log = fs.readFileSync(files.find(file => file.endsWith('.md')), 'utf8');
+  assert.ok(log.includes('文本评分与证据') && log.includes('测试证据'));
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('../scripts/generation.mjs', import.meta.url)), 'validate', directory], { encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).storyboardTasks, 1);
   assert.equal(manifest.tasks.some(task => task.targetId === 'V2'), false);
+});
+
+test('static and video exports validate a manifest and its plan together once per call', { concurrency: false }, async t => {
+  for (const video of [false, true]) {
+    const f = fixture(t), planFile = path.join(f.directory, 'visual-plan.json'), originalRead = fs.readFileSync;
+    const workflow = { schemaVersion: 1, projectId: f.plan.projectId, revision: 1, sourcePlanHash: promptHash(JSON.stringify(f.plan)), images: [],
+      videoShots: f.plan.shots.map(shot => ({ id: `VIDEO_${shot.id}`, shotIds: [shot.id], startImageId: null, endImageId: null,
+        startState: '人物站定', action: '保持持杯', camera: '固定机位', endState: '人物站定', invariants: ['服装不变'], durationSeconds: shot.seconds, dialogue: '', sound: '' })),
+      timeline: f.plan.shots.map(shot => ({ shotId: shot.id, seconds: shot.seconds, reason: '隔离软件样例' })), pilotVideoShotIds: [], results: [] };
+    const options = video ? { videoWorkflow: workflow } : undefined; let reads = 0;
+    fs.readFileSync = (filename, ...args) => {
+      if (typeof filename === 'string' && path.resolve(filename) === planFile) reads++;
+      return originalRead(filename, ...args);
+    };
+    try { await f.exportFiles(options); }
+    finally { fs.readFileSync = originalRead; }
+    assert.equal(reads, 1, `${video ? '视频' : '静态'}导出复用同一次源校验`);
+    f.manifest.tasks[0].count = 2; f.persist();
+    await assert.rejects(f.exportFiles(options), /仅生成一张/);
+  }
 });
 
 test('manifest rejects multiple images, missing tasks, prop tasks, reuse tasks and stale Prompt hashes', t => {
@@ -126,10 +172,14 @@ test('success requires local output; unknown and failed states cannot bypass sec
 });
 
 test('legacy text projects remain valid and export without sidecars or a manifest', async t => {
-  const { directory } = fixture(t);
+  const { directory, exportFiles } = fixture(t);
   fs.unlinkSync(path.join(directory, 'character-prompts.json'));
   fs.unlinkSync(path.join(directory, 'scene-prompts.json'));
   fs.unlinkSync(path.join(directory, 'generation-manifest.json'));
   assert.equal(validateVisualPlan(directory).plan.shots.length, 2);
-  assert.equal((await exportVisualProject(directory)).length, 1);
+  const firstFiles = await exportFiles(), firstWorkbook = firstFiles.find(file => file.endsWith('_分镜脚本.xlsx'));
+  assert.equal(firstFiles.length, 2);
+  const original = fs.readFileSync(firstWorkbook), nextFiles = await exportFiles();
+  assert.equal(nextFiles.find(file => file.endsWith('_分镜脚本.xlsx')), firstWorkbook);
+  assert.deepEqual(fs.readFileSync(firstWorkbook), original);
 });

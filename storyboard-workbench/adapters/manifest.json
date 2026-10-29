@@ -8,6 +8,12 @@
   },
   "models": {
     "default": null,
-    "glm": "adapters/glm.md"
+    "glm": "adapters/glm.md",
+    "openai": "adapters/models/openai/SKILL.md",
+    "anthropic": "adapters/models/anthropic/SKILL.md",
+    "google": "adapters/models/google/SKILL.md",
+    "deepseek": "adapters/models/deepseek/SKILL.md",
+    "qwen": "adapters/models/qwen/SKILL.md",
+    "kimi": "adapters/models/kimi/SKILL.md"
   }
 }

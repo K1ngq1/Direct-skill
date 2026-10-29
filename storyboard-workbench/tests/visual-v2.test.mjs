@@ -7,10 +7,18 @@ import { fileURLToPath } from 'node:url';
 import ExcelJS from '../scripts/vendor/exceljs.cjs';
 import { sealPlan, reportVisualProject, reviseVisualPlan, exportVisualProject, importFeedback, dimensionsFor, promptHash } from '../scripts/visual.mjs';
 import { assetPlanHash, contract } from '../scripts/visual_v2.mjs';
+import { assertRuntimeCapabilities } from '../scripts/runtime.mjs';
 
 const cli = fileURLToPath(new URL('../scripts/visual.mjs', import.meta.url));
 const read = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const save = (filename, value) => fs.writeFileSync(filename, JSON.stringify(value, null, 2) + '\n', 'utf8');
+const promptText = (workbook, type, name) => {
+  const parts = [];
+  workbook.getWorksheet('生成Prompt').eachRow((row, index) => {
+    if (index > 1 && row.getCell(1).text.startsWith(type) && row.getCell(2).text === name) parts.push(row.getCell(3).text);
+  });
+  return parts.join('');
+};
 const score = text => ({ promptHash: promptHash(text), reviewer: 'isolated-test-reviewer', rubricVersion: 'visual-v2',
   scores: dimensionsFor('visual-v2').map(([dimension]) => ({ dimension, score: 4, evidence: '50mm', reason: '隔离程序测试记录，不作为画面质量基线。' })),
   strengths: ['正文有明确摄影设计'], weaknesses: ['未验证实际生成画面'], rewrite: { needed: false, reason: '程序测试使用固定文本。', executed: false } });
@@ -43,6 +51,14 @@ function fixture(t, { calibration = false, emptyScene = false, sourceText = null
   const snapshot = revision => track(path.join(directory, 'visual-revisions', `${String(revision).padStart(6, '0')}.json`));
   t.after(() => {
     // Only known files returned or created by this fixture are removed, one path per operation.
+    for (const relative of ['excel-delivery/records', 'excel-delivery/snapshots']) {
+      const folder = path.join(directory, relative);
+      if (fs.existsSync(folder)) for (const name of fs.readdirSync(folder)) track(path.join(folder, name));
+    }
+    for (const name of ['excel-delivery.json', 'excel-delivery.lock', 'excel-delivery.pending.json']) {
+      const filename = path.join(directory, name);
+      if (fs.existsSync(filename)) track(filename);
+    }
     for (const filename of generated) if (fs.existsSync(filename)) fs.unlinkSync(filename);
     if (fs.existsSync(planFile)) fs.unlinkSync(planFile);
     if (fs.existsSync(projectFile)) fs.unlinkSync(projectFile);
@@ -78,8 +94,16 @@ function fixture(t, { calibration = false, emptyScene = false, sourceText = null
   const originalInput = structuredClone(input), sourceBytes = fs.readFileSync(source), projectBytes = fs.readFileSync(projectFile);
   snapshot(1);
   const plan = sealPlan(directory, input);
-  const bundle = (kind, filename) => save(track(path.join(directory, filename)), { schemaVersion: 1, projectId: plan.projectId, sourcePlanHash: assetPlanHash(plan, kind),
-    [kind]: plan.productionInventory[kind].map(asset => ({ assetId: asset.id, base: { mode: 'generate', text: `${asset.description}。同一对象的三个互补视角。`, referenceIds: [], basis: '本次隔离验收资产设定。' }, ...(kind === 'characters' ? { optionalDetails: [] } : {}) })) });
+  const bundle = (kind, filename) => save(track(path.join(directory, filename)), { schemaVersion: 1, projectId: plan.projectId, sourcePlanHash: assetPlanHash(plan, kind), ...(kind === 'locations' ? { designStageVersion: 1 } : {}),
+    [kind]: plan.productionInventory[kind].map(asset => ({ assetId: asset.id, base: { mode: 'generate', text: `${asset.description}。同一对象的三个互补视角。`, referenceIds: [], basis: '本次隔离验收资产设定。' }, ...(kind === 'characters' ? { optionalDetails: [] } : { sceneDesign: {
+      useAndUsers: emptyScene ? '脚本事实：空房无人，观察窗边木桌；导演补全：不新增使用者。' : '脚本事实：人物在房间站定；导演补全：桌旁留出半步停留空间。',
+      scriptFacts: [emptyScene ? '空房间内的窗边木桌。' : '人物站定在桌旁。'], layout: '木桌靠窗，右侧地面留出连贯通道。',
+      furnishingLayers: { large: ['木桌位于窗边，作为主要空间锚点。'], medium: [], small: [] },
+      useTraces: emptyScene ? '空房无人使用，桌面干净，本镜不新增痕迹。' : '木桌边缘有轻微使用磨痕，桌面保持空置。',
+      materials: '木桌保留可辨木纹，浅色墙面哑光，窗侧柔光形成层次。', composition: '木桌承载细节，右侧通道留空；中型收纳及小件用品不适用，不为本镜新增。',
+      invariants: ['木桌与窗户位置固定，右侧通道持续留空。'],
+      views: [{ id: `${asset.id}_MAIN`, shotIds: plan.shots.filter(shot => shot.locationId === asset.id).map(shot => shot.id), position: '窗户斜对面平视', visible: '窗边木桌与右侧地面。', keepClear: '人物手部及右侧通道。' }], constraintReview: []
+    } }) })) });
   if (!emptyScene) bundle('characters', 'character-prompts.json');
   bundle('locations', 'scene-prompts.json');
   assert.equal(reportVisualProject(directory).status, 'passed', JSON.stringify(reportVisualProject(directory).issues, null, 2));
@@ -87,7 +111,7 @@ function fixture(t, { calibration = false, emptyScene = false, sourceText = null
     snapshot(read(planFile).revision + 1);
     return reviseVisualPlan(directory, request, action);
   };
-  const exportFiles = async () => { const files = await exportVisualProject(directory); files.forEach(track); return files; };
+  const exportFiles = async options => { const files = await exportVisualProject(directory, options); files.forEach(track); return files; };
   const request = (changes, extra = {}) => ({ baseRevision: read(planFile).revision, actor: 'agent', reason: '用户要求定向调整本镜', userRequest: '请只修改指定镜头的画面。', kind: 'edit', shotEdits: [{ id: 'T1', changes }], ...extra });
   return { directory, project, plan, input, originalInput, source, sourceBytes, projectFile, projectBytes, planFile, track, snapshot, revise, exportFiles, request };
 }
@@ -98,15 +122,19 @@ test('v2 seals the default plan and exports a first-sheet storyboard without cho
   assert.ok(f.plan.shots.every(shot => shot.variantId === 'default' && shot.selection.by === 'agent-default'));
   assert.ok(f.plan.shots.every(shot => shot.review.sourceHash === shot.prompt.sourceHash && shot.semanticReview.sourceHash === shot.prompt.sourceHash));
   const files = await f.exportFiles(), workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('画面分镜与评分.xlsx'))));
-  const table = workbook.worksheets[0]; assert.equal(table.name, '分镜总表');
-  const promptColumn = table.getRow(1).values.indexOf('自然语言Prompt');
+  await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('_分镜脚本.xlsx'))));
+  assert.deepEqual(workbook.worksheets.map(sheet => sheet.name), ['分镜脚本', '生成Prompt', '人物与场景']);
+  assert.equal(files.filter(file => file.endsWith('.xlsx')).length, 1);
+  const table = workbook.worksheets[0]; assert.equal(table.name, '分镜脚本');
   assert.equal(table.getCell('A1').font.name, 'Microsoft YaHei');
-  assert.equal(table.getRow(2).getCell(promptColumn).font.name, 'Microsoft YaHei');
-  assert.deepEqual([2, 3, 4].map(row => table.getRow(row).getCell(promptColumn).value), f.plan.shots.map(shot => shot.prompt.text));
+  assert.equal(workbook.getWorksheet('生成Prompt').getCell('C2').font.name, 'Microsoft YaHei');
+  assert.deepEqual(f.plan.shots.map(shot => promptText(workbook, '静帧', shot.id)), f.plan.shots.map(shot => shot.prompt.text));
+  assert.equal(table.getCell('J1').value, '用户意见');
+  assert.equal(table.getCell('J2').protection.locked, false);
   assert.equal(workbook.getWorksheet('最终Prompt'), undefined);
-  const markdown = fs.readFileSync(files.find(file => file.endsWith('分镜总表.md')), 'utf8');
+  const markdown = fs.readFileSync(files.find(file => file.endsWith('.md')), 'utf8');
   for (const shot of f.plan.shots) assert.ok(markdown.includes(shot.prompt.text));
+  for (const marker of ['文本评分与证据', 'isolated-test-reviewer', '硬校验记录']) assert.ok(markdown.includes(marker));
   assert.ok(markdown.indexOf('## T1') < markdown.indexOf('## T2') && markdown.indexOf('## T2') < markdown.indexOf('## T3'));
   assert.deepEqual(fs.readFileSync(f.source), f.sourceBytes);
   assert.deepEqual(fs.readFileSync(f.projectFile), f.projectBytes);
@@ -156,6 +184,99 @@ test('a local shot edit invalidates its dependent shot while preserving an unrel
   assert.equal(changed.report.shots.find(shot => shot.id === 'T2').scoreValid, false);
   assert.equal(changed.report.shots.find(shot => shot.id === 'T3').scoreValid, true);
   assert.deepEqual(fs.readFileSync(f.projectFile), f.projectBytes);
+});
+
+test('runtime revisions resolve failures by appending evidence without changing creative content or repair limits', t => {
+  const f = fixture(t), original = structuredClone(f.plan);
+  const runtime = run => ({ baseRevision: read(f.planFile).revision, actor: 'agent', reason: '记录本次实际运行结果', kind: 'runtime', run });
+  const failure = { category: 'network', message: '本次只读工具请求连接失败。' };
+  const failed = f.revise(runtime({ failures: [failure] }));
+  assert.ok(failed.report.issues.some(issue => issue.code === 'HOST_FAILURE'));
+  assert.deepEqual(failed.plan.shots, original.shots);
+  const resolution = { failureIndex: 0, reason: '同一只读操作已成功返回，连接恢复。', resolvedAt: '2026-10-27T00:00:00Z' };
+  const recovered = f.revise(runtime({ failureResolutions: [resolution] }));
+  assert.equal(recovered.report.status, 'passed');
+  assert.deepEqual(recovered.plan.run.failures, [failure]);
+  assert.deepEqual(recovered.plan.repairAttempts, []);
+  assert.deepEqual(recovered.affectedShotIds, []);
+  assert.deepEqual(recovered.plan.shots, original.shots);
+  assert.deepEqual(read(path.join(f.directory, 'visual-revisions', '000002.json')).plan.run.failures, [failure]);
+  assert.equal(read(path.join(f.directory, 'visual-revisions', '000002.json')).plan.run.failureResolutions, undefined);
+  const bytes = fs.readFileSync(f.planFile);
+  for (const update of [{ failures: [] }, { failures: undefined }, { failures: [{ ...failure, message: '覆盖原错误' }] }, { failureResolutions: [] }, { failureResolutions: undefined }, { failureResolutions: [resolution, resolution] }, { failureResolutions: [resolution, { ...resolution, failureIndex: 99 }] }]) assert.throws(() => f.revise(runtime(update)));
+  assert.throws(() => f.revise({ ...runtime({ platform: 'other-host' }), shotEdits: [] }), /runtime只能修改run/);
+  assert.throws(() => f.revise({ ...runtime({ platform: 'other-host' }), kind: 'review' }), /run仅能/);
+  assert.deepEqual(fs.readFileSync(f.planFile), bytes);
+});
+
+test('capability observations are validated and reset when runtime identity changes', t => {
+  const f = fixture(t);
+  const runtime = run => ({ baseRevision: read(f.planFile).revision, actor: 'agent', reason: '登记当前宿主已观察到的能力', kind: 'runtime', run });
+  const capabilityObservations = { toolUse: { status: 'unsupported', evidence: '本次宿主明确拒绝工具调用。', observedAt: '2026-10-27T00:00:00Z' } };
+  const observed = f.revise(runtime({ capabilities: { toolUse: 'unsupported' }, capabilityObservations }));
+  assert.equal(observed.report.status, 'passed', '不支持工具不会伪造内容错误；实际操作由能力守卫拒绝');
+  assert.deepEqual(observed.plan.shots, f.plan.shots);
+  assert.throws(() => f.revise(runtime({ capabilities: { toolUse: 'supported' } })), error => error.issue?.code === 'CAPABILITY_OBSERVATION_INVALID');
+  const changed = f.revise(runtime({ model: 'explicit-new-session' }));
+  assert.equal(changed.plan.run.capabilities, undefined);
+  assert.equal(changed.plan.run.capabilityObservations, undefined);
+  assert.equal(changed.report.status, 'passed');
+  const broken = structuredClone(changed.plan);
+  broken.run.capabilities = { imageUnderstanding: 'supported' }; broken.run.capabilityObservations = {};
+  assert.ok(reportVisualProject(f.directory, broken).issues.some(issue => issue.code === 'CAPABILITY_OBSERVATION_INVALID'));
+  delete broken.run.capabilityObservations;
+  assert.equal(reportVisualProject(f.directory, broken).status, 'passed', '旧v2无证据的能力元数据保留兼容，不能当作实测证明');
+  broken.run.capabilities.imageUnderstanding = 'BANANA';
+  assert.ok(reportVisualProject(f.directory, broken).issues.some(issue => issue.code === 'CAPABILITY_OBSERVATION_INVALID'));
+  assert.throws(() => f.revise(runtime({ capabilities: { imageUnderstanding: 'supported' } })), /新能力状态须提供/);
+});
+
+test('runtime capability patches retain unrelated restrictions and require explicit unknown resets', t => {
+  const f = fixture(t), originalShots = structuredClone(f.plan.shots);
+  const runtime = run => ({ baseRevision: read(f.planFile).revision, actor: 'agent', reason: '记录本次能力观察变化及撤销原因。', kind: 'runtime', run });
+  const observation = (status, evidence) => ({ status, evidence, observedAt: '2026-10-27T00:00:00Z' });
+  const fileWrite = observation('unsupported', '当前宿主拒绝文件写入。'), toolUse = observation('supported', '只读工具实际返回成功。');
+  f.revise(runtime({ capabilities: { fileWrite: 'unsupported', toolUse: 'supported' }, capabilityObservations: { fileWrite, toolUse } }));
+  const refreshed = observation('supported', '再次只读调用实际成功，其他能力尚未改变。');
+  const partial = f.revise(runtime({ capabilities: { toolUse: 'supported' }, capabilityObservations: { toolUse: refreshed } }));
+  assert.deepEqual(partial.plan.run.capabilities, { fileWrite: 'unsupported', toolUse: 'supported' });
+  assert.deepEqual(partial.plan.run.capabilityObservations, { fileWrite, toolUse: refreshed });
+  assert.throws(() => assertRuntimeCapabilities(partial.plan.run, ['fileWrite']), error => error.issue.code === 'RUNTIME_CAPABILITY_UNSUPPORTED');
+  f.revise(runtime({ capabilityObservations: { toolUse } }));
+  const beforeInvalid = fs.readFileSync(f.planFile);
+  for (const update of [
+    { capabilityObservations: undefined }, { capabilities: undefined },
+    { capabilityObservations: { toolUse: observation('unsupported', '状态与原能力不一致。') } },
+    { capabilities: new Map([['toolUse', 'supported']]) },
+    { capabilities: Object.defineProperty({}, 'toolUse', { value: 'unsupported' }) },
+    { capabilityObservations: Object.create({ toolUse: refreshed }) },
+    { capabilities: { toolUse: 'unknown' }, capabilityObservations: { toolUse: undefined } }
+  ]) assert.throws(() => f.revise(runtime(update)));
+  assert.deepEqual(fs.readFileSync(f.planFile), beforeInvalid);
+  const reset = f.revise(runtime({ capabilities: { toolUse: 'unknown' } }));
+  assert.deepEqual(reset.plan.run.capabilities, { fileWrite: 'unsupported', toolUse: 'unknown' });
+  assert.deepEqual(reset.plan.run.capabilityObservations, { fileWrite });
+  const changed = f.revise(runtime({ model: 'different-session', capabilities: { toolUse: 'supported' }, capabilityObservations: { toolUse } }));
+  assert.deepEqual(changed.plan.run.capabilities, { toolUse: 'supported' });
+  assert.deepEqual(changed.plan.run.capabilityObservations, { toolUse });
+  assert.deepEqual(changed.plan.shots, originalShots);
+  assert.deepEqual(changed.plan.repairAttempts, []);
+});
+
+test('new plans require evidence for claimed capabilities while unknown capabilities stay valid', t => {
+  for (const status of ['supported', 'unsupported']) {
+    assert.throws(() => fixture(t, { configure(input) { input.run.capabilities = { toolUse: status }; } }), /新能力状态须提供capabilityObservations证据/);
+  }
+  const observed = fixture(t, { configure(input) {
+    input.run.capabilities = { toolUse: 'supported' };
+    input.run.capabilityObservations = { toolUse: { status: 'supported', evidence: '本次只读工具调用成功返回。', observedAt: '2026-10-27T00:00:00Z' } };
+  } });
+  assert.equal(reportVisualProject(observed.directory).status, 'passed');
+  const unknown = fixture(t, { configure(input) { input.run.capabilities = { toolUse: 'unknown' }; } });
+  assert.equal(reportVisualProject(unknown.directory).status, 'passed');
+  assert.throws(() => fixture(t, { configure(input) {
+    input.run.capabilities = Object.create({ toolUse: 'unsupported' });
+  } }), /新能力状态须提供|运行能力记录/);
 });
 
 test('optional videoPrompt validates text, normalizes newlines and invalidates dependent checks on revision', t => {
@@ -211,12 +332,12 @@ test('synthetic three-shot product brief keeps cup ownership and image/video pro
   const broken = structuredClone(f.plan); broken.shots[1].shotSchema.props[0].holderAssetIds = ['UNKNOWN'];
   assert.ok(reportVisualProject(f.directory, broken).issues.some(issue => issue.code === 'SHOT_SCHEMA_INVALID' && issue.entityId === 'T2'));
   const files = await f.exportFiles(), workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('画面分镜与评分.xlsx'))));
-  const table = workbook.worksheets[0], column = label => table.getRow(1).values.indexOf(label);
+  await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('_分镜脚本.xlsx'))));
+  const markdown = fs.readFileSync(files.find(file => file.endsWith('.md')), 'utf8');
   for (const [index, shot] of f.plan.shots.entries()) {
-    assert.equal(table.getRow(index + 2).getCell(column('自然语言Prompt')).value, shot.prompt.text);
-    assert.equal(table.getRow(index + 2).getCell(column('视频Prompt')).value, shot.videoPrompt);
-    assert.equal(table.getRow(index + 2).getCell(column('原稿画面')).value, originals[index]);
+    assert.equal(promptText(workbook, '静帧', shot.id), shot.prompt.text);
+    assert.equal(promptText(workbook, '视频', shot.id), shot.videoPrompt);
+    assert.ok(markdown.includes('原稿内容：' + originals[index]));
   }
 });
 
@@ -274,11 +395,10 @@ test('adding a candidate leaves the adopted prose untouched; user selection upda
   assert.equal(selected.plan.shots[0].selection.by, 'user'); assert.equal(selected.plan.shots[0].prompt.text, text);
   assert.equal(selected.plan.shots[0].videoPrompt, request.candidate.changes.videoPrompt);
   const files = await f.exportFiles(), workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('画面分镜与评分.xlsx'))));
-  const sheet = workbook.worksheets[0], column = sheet.getRow(1).values.indexOf('自然语言Prompt');
-  assert.equal(sheet.getRow(2).getCell(column).value, text);
-  assert.equal(sheet.getRow(2).getCell(sheet.getRow(1).values.indexOf('视频Prompt')).value, selected.plan.shots[0].videoPrompt);
-  assert.ok(fs.readFileSync(files.find(file => file.endsWith('分镜总表.md')), 'utf8').includes(text));
+  await workbook.xlsx.load(fs.readFileSync(files.find(file => file.endsWith('_分镜脚本.xlsx'))));
+  assert.equal(promptText(workbook, '静帧', 'T1'), text);
+  assert.equal(promptText(workbook, '视频', 'T1'), selected.plan.shots[0].videoPrompt);
+  assert.ok(fs.readFileSync(files.find(file => file.endsWith('.md')), 'utf8').includes(text));
   assert.deepEqual(fs.readFileSync(f.projectFile), f.projectBytes);
 });
 
@@ -313,7 +433,7 @@ test('restoring a historical plan creates a new revision without deleting newer 
 });
 
 test('UTF-8 exports retain real zero-point human feedback and a later revision writes a new workbook', async t => {
-  const f = fixture(t, { calibration: true }), files = await f.exportFiles();
+  const f = fixture(t, { calibration: true }), files = await f.exportFiles({ calibration: true });
   const ratings = files.find(file => file.endsWith('人工校准.xlsx')), workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(fs.readFileSync(ratings));
   const sheet = workbook.getWorksheet('人工评分'), headers = sheet.getRow(1).values;
@@ -322,10 +442,10 @@ test('UTF-8 exports retain real zero-point human feedback and a later revision w
   fs.writeFileSync(ratings, Buffer.from(await workbook.xlsx.writeBuffer()));
   const filled = fs.readFileSync(ratings), feedback = f.track(await importFeedback(f.directory, ratings));
   assert.equal(read(feedback).ratings[0].score, 0);
-  await assert.rejects(f.exportFiles(), /拒绝覆盖|已存在/);
+  await assert.rejects(f.exportFiles({ calibration: true }), /拒绝覆盖|已存在/);
   assert.deepEqual(fs.readFileSync(ratings), filled);
   f.revise(f.request({ motion: '第三镜按用户要求增加停留说明' }, { shotEdits: [{ id: 'T3', changes: { motion: '第三镜按用户要求增加停留说明' } }] }));
-  const nextFiles = await f.exportFiles(), nextRatings = nextFiles.find(file => file.endsWith('人工校准.xlsx'));
+  const nextFiles = await f.exportFiles({ calibration: true }), nextRatings = nextFiles.find(file => file.endsWith('人工校准.xlsx'));
   assert.notEqual(nextRatings, ratings); assert.ok(nextRatings.includes('revision-000002'));
   assert.deepEqual(fs.readFileSync(ratings), filled); assert.equal(read(feedback).ratings[0].score, 0);
   const nextBook = new ExcelJS.Workbook(); await nextBook.xlsx.load(fs.readFileSync(nextRatings));
@@ -390,8 +510,14 @@ test('an empty scene plan needs no character file, while an explicitly blocked c
   assert.equal(fs.existsSync(path.join(empty.directory, 'character-prompts.json')), false);
   assert.equal(reportVisualProject(empty.directory).status, 'passed');
   const emptyFiles = await empty.exportFiles();
-  assert.ok(emptyFiles.some(filename => filename.endsWith('场景资产Prompt.xlsx')));
-  assert.ok(!emptyFiles.some(filename => filename.endsWith('人物资产Prompt.xlsx')));
+  assert.equal(emptyFiles.filter(filename => filename.endsWith('.xlsx')).length, 1);
+  const emptyWorkbook = new ExcelJS.Workbook();
+  await emptyWorkbook.xlsx.load(fs.readFileSync(emptyFiles.find(filename => filename.endsWith('_分镜脚本.xlsx'))));
+  assert.equal(emptyWorkbook.getWorksheet('人物与场景').rowCount, 5);
+  assert.deepEqual(emptyWorkbook.getWorksheet('人物与场景').getSheetValues().slice(2).map(row => row[1]), ['第一房间', '第一房间（续）', '第二房间', '第二房间（续）']);
+  assert.equal(emptyWorkbook.getWorksheet('人物与场景').getCell('B2').value, '场景');
+  assert.equal(promptText(emptyWorkbook, '人物', '灰衫人物'), '');
+  assert.ok(promptText(emptyWorkbook, '场景', '第一房间'));
   const populated = fixture(t), filename = path.join(populated.directory, 'character-prompts.json'), bundle = read(filename);
   Object.assign(bundle.characters[0].base, { mode: 'blocked', text: '', basis: '角色可见服装存在关键矛盾，待用户确认。' });
   save(filename, bundle);
@@ -399,5 +525,7 @@ test('an empty scene plan needs no character file, while an explicitly blocked c
   assert.equal(report.status, 'pending');
   assert.ok(report.issues.some(issue => issue.code === 'ASSET_PROMPT_BLOCKED' && issue.severity === 'pending' && issue.path.endsWith('.P1')));
   const pendingFiles = await populated.exportFiles();
-  assert.ok(pendingFiles.some(filename => filename.endsWith('人物资产Prompt.xlsx')));
+  assert.equal(pendingFiles.filter(filename => filename.endsWith('.xlsx')).length, 1);
+  const pendingLog = fs.readFileSync(pendingFiles.find(filename => filename.endsWith('.md')), 'utf8');
+  assert.ok(pendingLog.includes('角色可见服装存在关键矛盾，待用户确认。'));
 });

@@ -1104,7 +1104,7 @@ export function exportProject(directory, project = loadProject(directory)) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const [command, directory, patchFile, planFile] = process.argv.slice(2);
     if (!directory) fail('用法：node project.mjs export|apply|pending|prepare-batch <项目目录> [patch.json|镜头ID,镜头ID]；或 init-story <项目目录> <原文.txt|md> <计划.json>');

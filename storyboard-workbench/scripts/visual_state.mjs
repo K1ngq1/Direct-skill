@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { contract, digest, sourceHashV2 } from './visual_v2.mjs';
-import { loadRuleSnapshot } from './runtime.mjs';
+import { loadRuleSnapshot, assertRuntimeCapabilities } from './runtime.mjs';
 
 const read = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
 const writeNew = (filename, value, created) => {
@@ -10,9 +10,16 @@ const writeNew = (filename, value, created) => {
   try { created?.(); fs.writeFileSync(handle, JSON.stringify(value, null, 2) + '\n', 'utf8'); }
   finally { fs.closeSync(handle); }
 };
-const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const object = value => value !== null && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value)) && Reflect.ownKeys(value).every(key => {
+  const property = Object.getOwnPropertyDescriptor(value, key);
+  return typeof key === 'string' && property?.enumerable === true && Object.hasOwn(property, 'value');
+});
 const required = (condition, message) => { if (!condition) throw new Error(message); };
 const same = (a, b) => digest(a) === digest(b);
+function requireCapabilityEvidence(run) {
+  if (object(run) && Object.hasOwn(run, 'capabilities')) required(object(run.capabilities) && (Object.values(run.capabilities).every(value => value === 'unknown') || object(run.capabilityObservations)), '新能力状态须提供capabilityObservations证据');
+  assertRuntimeCapabilities(run);
+}
 
 export function localFolder(directory, relative) {
   const root = fs.realpathSync(directory), target = path.resolve(root, relative), rel = path.relative(root, target);
@@ -45,6 +52,7 @@ export function freezeV2(project, plan, explicitlyReviewed = new Set()) {
 }
 
 export function initializeV2(project, input) {
+  requireCapabilityEvidence(input?.run);
   const plan = structuredClone(input);
   plan.projectId ??= crypto.randomUUID(); plan.sourceSha256 ??= project.source.sha256;
   plan.revision = 1; plan.rules = loadRuleSnapshot();
@@ -117,13 +125,35 @@ export function changeV2(directory, request, { project, inspect, action = 'revis
     }
     let next = structuredClone(before), accepted = true, attemptReport = null;
     const explicitReviews = new Set(), affected = new Set();
-    const knownFields = { revise: ['kind', 'shotEdits', 'assetEdits', 'spec', 'sourceResolutions', 'refreshRules', 'userRequest'], 'add-candidate': ['shotId', 'candidate'], select: ['shotId', 'candidateId'], restore: ['targetRevision'] };
+    const knownFields = { revise: ['kind', 'shotEdits', 'assetEdits', 'spec', 'sourceResolutions', 'refreshRules', 'userRequest', 'run'], 'add-candidate': ['shotId', 'candidate'], select: ['shotId', 'candidateId'], restore: ['targetRevision'] };
     required(Object.hasOwn(knownFields, action), '未知修订操作');
     for (const key of Object.keys(request)) required(['baseRevision', 'actor', 'reason', ...knownFields[action]].includes(key), `未知请求字段：${key}`);
     const findShot = value => { const shot = next.shots.find(row => row.id === value); required(shot, `镜头不存在：${value}`); return shot; };
     const markReviews = (shotId, changes) => { for (const key of ['review', 'semanticReview']) if (Object.hasOwn(changes, key)) explicitReviews.add(`${shotId}:${key}`); };
     if (action === 'revise') {
-      required(['repair', 'edit', 'review'].includes(request.kind), 'kind须为repair/edit/review');
+      required(['repair', 'edit', 'review', 'runtime'].includes(request.kind), 'kind须为repair/edit/review/runtime');
+      if (request.kind === 'runtime') {
+        required(object(request.run) && Object.keys(request.run).length > 0, 'runtime须提供非空run更新');
+        required(Object.keys(request).every(key => ['baseRevision', 'actor', 'reason', 'kind', 'run'].includes(key)), 'runtime只能修改run运行记录');
+        for (const key of Object.keys(request.run)) required(Object.hasOwn(contract.run, key), `未知run字段：${key}`);
+        const previousRun = next.run;
+        const identityChanged = ['platform', 'model'].some(key => Object.hasOwn(request.run, key) && !same(request.run[key], previousRun[key]));
+        next.run = { ...previousRun, ...request.run };
+        for (const key of ['capabilities', 'capabilityObservations']) {
+          if (identityChanged && !Object.hasOwn(request.run, key)) delete next.run[key];
+          else if (!identityChanged && Object.hasOwn(request.run, key) && object(request.run[key])) next.run[key] = { ...previousRun[key], ...request.run[key] };
+        }
+        if (object(request.run.capabilities) && object(next.run.capabilityObservations)) {
+          next.run.capabilityObservations = { ...next.run.capabilityObservations };
+          for (const [name, status] of Object.entries(request.run.capabilities)) if (status === 'unknown' && !Object.hasOwn(request.run.capabilityObservations ?? {}, name)) delete next.run.capabilityObservations[name];
+        }
+        if (['capabilities', 'capabilityObservations'].some(key => Object.hasOwn(request.run, key))) requireCapabilityEvidence(next.run);
+        for (const key of ['failures', 'failureResolutions']) if (Object.hasOwn(request.run, key)) {
+          const previous = previousRun[key] ?? [], updated = next.run[key];
+          required(Array.isArray(updated) && updated.length >= previous.length && previous.every((row, index) => same(row, updated[index])), `run.${key}只能追加，不能删除或改写历史`);
+        }
+        next.run = structuredClone(next.run);
+      } else required(request.run === undefined, 'run仅能通过kind:runtime修订');
       if (request.kind === 'edit') required(typeof request.userRequest === 'string' && request.userRequest.trim(), '定向edit须记录新的userRequest；自动纠错使用repair并受两轮上限约束');
       if (request.kind === 'repair') required(before.repairAttempts.length < 2, '已达两轮自动修复上限，请保留待处理项');
       for (const group of ['shotEdits', 'assetEdits']) if (request[group] !== undefined) required(Array.isArray(request[group]), `${group}须为数组`);

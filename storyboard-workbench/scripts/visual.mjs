@@ -7,6 +7,8 @@ import { checkShotSchema, ProjectError } from './project.mjs';
 import { exportVisualExcel, exportCharacterExcel, exportSceneExcel, exportVisualMarkdown, validateCharacterBundle, validateSceneBundle } from './export_visual_excel.mjs';
 import { inspectV2, sourceHashV2, parseFailure, summarize, issue, assetPlanHash } from './visual_v2.mjs';
 import { initializeV2, freezeV2, saveInitialV2, changeV2, localFolder } from './visual_state.mjs';
+import { validateLocalImage } from './local_image.mjs';
+export { validateLocalImage } from './local_image.mjs';
 
 export const dimensions = [
   ['moment', '主体与关键瞬间', 10], ['appearance', '外貌与服装', 10],
@@ -44,19 +46,6 @@ const hash = value => promptHash(JSON.stringify(canonical(value)));
 const fileHash = filename => promptHash(fs.readFileSync(filename));
 const planFile = directory => path.join(directory, 'visual-plan.json');
 const saveNew = (filename, value) => fs.writeFileSync(filename, JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
-
-export function validateLocalImage(directory, output) {
-  string(output?.path, '图片路径');
-  if (!/^[a-f0-9]{64}$/i.test(output.sha256 ?? '')) fail('图片缺少SHA256');
-  const root = fs.realpathSync(directory), filename = path.resolve(root, output.path);
-  const inside = value => { const relative = path.relative(root, value); return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative); };
-  if (path.isAbsolute(output.path) || !inside(filename)) fail('图片路径必须位于项目目录');
-  if (!fs.existsSync(filename) || !fs.statSync(filename).isFile()) fail('图片文件不存在');
-  const real = fs.realpathSync(filename);
-  if (!inside(real)) fail('图片路径越出项目目录');
-  if (fileHash(filename) !== output.sha256.toLowerCase()) fail('图片哈希不一致');
-  return real;
-}
 
 function checkGeneratedReference(directory, plan, reference, suppliedManifest) {
   const manifestFile = path.join(directory, 'generation-manifest.json');
@@ -264,25 +253,56 @@ export function sealPlan(directory, inputPlan) {
   return plan;
 }
 
-export async function exportVisualProject(directory) {
-  const current = read(planFile(directory)), v2 = current.schemaVersion === 2;
-  const { plan, project, totalSeconds, report } = validateVisualPlan(directory, current, { allowPending: v2 });
-  const manifestFile = path.join(directory, 'generation-manifest.json');
-  const manifest = fs.existsSync(manifestFile) ? read(manifestFile) : null;
-  if (manifest) { const { validateGenerationManifest } = await import('./generation.mjs'); validateGenerationManifest(directory, manifest); }
+export async function exportVisualProject(directory, { videoWorkflow = null, calibration = false, bindWorkbook = null } = {}) {
+  let checked;
+  if (videoWorkflow) {
+    const { validateVideoWorkflow } = await import('./video.mjs');
+    checked = validateVideoWorkflow(directory, videoWorkflow, { forExport: true });
+  } else {
+    const manifestFile = path.join(directory, 'generation-manifest.json');
+    if (fs.existsSync(manifestFile)) {
+      const { validateGenerationProject } = await import('./generation.mjs');
+      checked = validateGenerationProject(directory);
+    } else {
+      const current = read(planFile(directory));
+      checked = validateVisualPlan(directory, current, { allowPending: current.schemaVersion === 2 });
+    }
+  }
+  const { plan, project, totalSeconds, report: validationReport } = checked, v2 = plan.schemaVersion === 2;
+  const report = validationReport ?? { ...summarize([], plan), totalSeconds };
+  const manifest = checked.generation?.manifest ?? null;
   const displayPlan = structuredClone(plan);
   if (v2) for (const sample of displayPlan.calibration) if (sample.sourceHash !== sourceHashV2(project, plan, plan.shots.find(shot => shot.id === sample.shotId))) sample.review = null;
-  const files = await exportVisualExcel(displayPlan, project, totalSeconds, manifest, report);
-  const characterFile = path.join(directory, 'character-prompts.json');
-  if (fs.existsSync(characterFile) && (!v2 || !report.issues.some(row => row.path === '$.character-prompts.json'))) files.push(await exportCharacterExcel(read(characterFile), plan));
-  const sceneFile = path.join(directory, 'scene-prompts.json');
-  if (fs.existsSync(sceneFile) && (!v2 || !report.issues.some(row => row.path === '$.scene-prompts.json'))) files.push(await exportSceneExcel(read(sceneFile), plan));
-  if (v2) {
-    files.push({ filename: '分镜总表.md', buffer: Buffer.from(exportVisualMarkdown(displayPlan, project, report), 'utf8') });
-    files.push({ filename: '检查结果.json', buffer: Buffer.from(JSON.stringify(report, null, 2) + '\n', 'utf8') });
+  if (videoWorkflow) {
+    for (const replacement of videoWorkflow.shotPrompts ?? []) {
+      const shot = displayPlan.shots.find(shot => shot.id === replacement.shotId);
+      shot.prompt = { ...shot.prompt, text: replacement.text, textHash: promptHash(replacement.text) };
+    }
   }
-  const output = v2 ? localFolder(directory, `exports/revision-${String(plan.revision).padStart(6, '0')}`) : path.join(directory, 'exports'); fs.mkdirSync(output, { recursive: true });
-  if (v2 && files.some(file => fs.existsSync(path.join(output, file.filename)))) fail('本版本导出已存在，拒绝覆盖；保留人工内容，修订后导出新版本');
+  const context = { directory, workflow: videoWorkflow, manifest, calibration };
+  const characterFile = path.join(directory, 'character-prompts.json');
+  if (fs.existsSync(characterFile) && (!v2 || !report.issues.some(row => row.path === '$.character-prompts.json'))) context.characterBundle = read(characterFile);
+  const sceneFile = path.join(directory, 'scene-prompts.json');
+  if (fs.existsSync(sceneFile) && (!v2 || !report.issues.some(row => row.path === '$.scene-prompts.json'))) context.sceneBundle = read(sceneFile);
+  if (checked.sceneBundle) context.sceneBundle = checked.sceneBundle;
+  const files = await exportVisualExcel(displayPlan, project, videoWorkflow ? videoWorkflow.timeline.reduce((sum, row) => sum + row.seconds, 0) : totalSeconds, manifest, report, context);
+  files.push({ filename: '制作日志.md', buffer: Buffer.from(exportVisualMarkdown(displayPlan, project, report, context), 'utf8') });
+  let relativeOutput;
+  if (videoWorkflow) relativeOutput = `exports/video-revision-${String(videoWorkflow.revision).padStart(6, '0')}${calibration ? '-calibration' : ''}`;
+  else if (v2) relativeOutput = `exports/revision-${String(plan.revision).padStart(6, '0')}${calibration ? '-calibration' : ''}`;
+  else {
+    let next = 1;
+    while (fs.existsSync(path.join(directory, `exports/delivery-${String(next).padStart(6, '0')}`))) next++;
+    relativeOutput = `exports/delivery-${String(next).padStart(6, '0')}`;
+  }
+  if (!calibration) {
+    const { deliverExcel } = await import('./excel_delivery.mjs');
+    return deliverExcel(directory, { file: files[0], log: files.at(-1), planHash: hash(plan),
+      workflowHash: videoWorkflow ? promptHash(JSON.stringify(videoWorkflow)) : null, bindWorkbook, outputDirectory: path.resolve(directory, relativeOutput) });
+  }
+  if (bindWorkbook) fail('人工校准表不使用正式Excel绑定');
+  const output = localFolder(directory, relativeOutput); fs.mkdirSync(output, { recursive: true });
+  if (files.some(file => fs.existsSync(path.join(output, file.filename)))) fail('本版本导出已存在，拒绝覆盖；保留人工内容，修订后导出新版本');
   const ratings = path.join(output, '人工校准.xlsx');
   if (fs.existsSync(ratings)) {
     const existing = new ExcelJS.Workbook(); await existing.xlsx.load(fs.readFileSync(ratings));
@@ -294,7 +314,7 @@ export async function exportVisualProject(directory) {
       if ([scoreColumn, reasonColumn].some(column => ![null, undefined, ''].includes(sheet.getRow(row).getCell(column).value))) fail('已有校准表包含用户填写内容，拒绝覆盖；请先另存或导入评分');
     }
   }
-  for (const file of files) fs.writeFileSync(path.join(output, file.filename), file.buffer, v2 ? { flag: 'wx' } : undefined);
+  for (const file of files) fs.writeFileSync(path.join(output, file.filename), file.buffer, { flag: 'wx' });
   return files.map(file => path.join(output, file.filename));
 }
 
@@ -381,10 +401,10 @@ export async function importFeedback(directory, filename) {
   saveNew(target, record); return target;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+async function main() {
   try {
     const [command, directory, input] = process.argv.slice(2);
-    if (!directory) fail('用法：visual.mjs seal <project> <plan.json> | report/validate/export <project> | revise/add-candidate/select/restore <project> <request.json> | export-characters <project> | feedback <project> <ratings.xlsx>');
+    if (!directory) fail('用法：visual.mjs seal <project> <plan.json> | report/validate/export/export-calibration <project> | bind-excel <project> <existing.xlsx> | revise/add-candidate/select/restore <project> <request.json> | export-characters <project> | feedback <project> <ratings.xlsx>');
     let result;
     if (command === 'seal' && input) { const plan = sealPlan(directory, read(input)); result = { projectId: plan.projectId, status: 'sealed', ...(plan.schemaVersion === 2 ? { revision: plan.revision, validation: reportVisualProject(directory) } : {}) }; }
     else if (command === 'report') { result = reportVisualProject(directory); if (!result.valid) process.exitCode = 1; }
@@ -401,6 +421,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       if (!changed.accepted) process.exitCode = 1;
     }
     else if (command === 'export') result = { files: await exportVisualProject(directory) };
+    else if (command === 'bind-excel' && input) result = { files: await exportVisualProject(directory, { bindWorkbook: input }) };
+    else if (command === 'export-calibration') result = { files: await exportVisualProject(directory, { calibration: true }) };
     else if (command === 'export-characters') {
       const { plan } = validateVisualPlan(directory);
       const file = await exportCharacterExcel(read(path.join(directory, 'character-prompts.json')), plan);
@@ -414,3 +436,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log(JSON.stringify(result, null, 2));
   } catch (error) { console.error(JSON.stringify(error.report ?? parseFailure(error), null, 2)); process.exitCode = 1; }
 }
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

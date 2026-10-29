@@ -6,7 +6,7 @@
   "license": "MIT",
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test storyboard-workbench/tests/runtime.test.mjs storyboard-workbench/tests/visual.test.mjs storyboard-workbench/tests/visual-v2.test.mjs storyboard-workbench/tests/visual-v2-export.test.mjs storyboard-workbench/tests/generation.test.mjs storyboard-workbench/tests/excel-export.test.mjs storyboard-workbench/tests/release.test.mjs",
+    "test": "node --test storyboard-workbench/tests/runtime.test.mjs storyboard-workbench/tests/visual.test.mjs storyboard-workbench/tests/visual-v2.test.mjs storyboard-workbench/tests/visual-v2-export.test.mjs storyboard-workbench/tests/generation.test.mjs storyboard-workbench/tests/generation-batch.test.mjs storyboard-workbench/tests/generation-pipeline.test.mjs storyboard-workbench/tests/generation-bridge.test.mjs storyboard-workbench/tests/libtv-assets.test.mjs storyboard-workbench/tests/libtv-generation.test.mjs storyboard-workbench/tests/libtv-generation-store.test.mjs storyboard-workbench/tests/libtv-delivery.test.mjs storyboard-workbench/tests/libtv-image-file.test.mjs storyboard-workbench/tests/video.test.mjs storyboard-workbench/tests/excel-delivery.test.mjs storyboard-workbench/tests/patch-excel.test.mjs storyboard-workbench/tests/scene-art.test.mjs storyboard-workbench/tests/excel-export.test.mjs storyboard-workbench/tests/release.test.mjs",
     "doctor": "node storyboard-workbench/scripts/runtime.mjs doctor"
   }
 }

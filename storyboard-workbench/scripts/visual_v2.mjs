@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { checkShotSchema } from './project.mjs';
-import { loadRuleSnapshot } from './runtime.mjs';
+import { loadRuleSnapshot, assertRuntimeCapabilities } from './runtime.mjs';
 
 export const contract = JSON.parse(fs.readFileSync(new URL('../schemas/visual-plan-v2.json', import.meta.url), 'utf8'));
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -69,6 +69,7 @@ export function inspectV2(directory, project, plan, { sealed = true, checkReview
       if (optional && item === undefined) continue;
       const valid = ({ text, id, sha256: sha, array: Array.isArray, object,
         positiveInteger: v => Number.isInteger(v) && v > 0,
+        nonnegativeInteger: v => Number.isInteger(v) && v >= 0,
         positiveNumber: v => typeof v === 'number' && Number.isFinite(v) && v > 0,
         nullableId: v => v === null || id(v), nullableObject: v => v === null || object(v), nullableText: v => v === null || text(v),
         '2': v => v === 2, 'visual-excel-v2': v => v === 'visual-excel-v2', 'visual-v2': v => v === 'visual-v2'
@@ -95,7 +96,17 @@ export function inspectV2(directory, project, plan, { sealed = true, checkReview
     if (digest(plan.rules) !== digest(current)) pending('RULES_STALE', '$.rules', '规则快照缺失或与当前共用规则不一致', null, '通过 revise 的 refreshRules 刷新规则；重新核对受影响内容。');
   } catch (error) { add('runtime', 'RULES_UNAVAILABLE', '$.rules', error.message, '恢复缺失规则或依赖后重新运行，不由模型声称已加载。'); }
   if (!text(plan.run?.platform) || !(plan.run?.model === null || text(plan.run?.model))) add('structure', 'RUN_METADATA', '$.run', '须记录实际宿主和可见模型标识；未知模型用 null', '填写 platform、model，不把配置名称当成已验证模型能力。');
-  for (const failure of list(plan.run?.failures)) {
+  try { assertRuntimeCapabilities(plan.run); }
+  catch (error) { issues.push(error.issue); }
+  const failureResolutions = list(plan.run?.failureResolutions), failures = list(plan.run?.failures);
+  const resolved = new Set();
+  for (const resolution of failureResolutions) {
+    fields(resolution, 'failureResolution', '$.run.failureResolutions');
+    if (!Number.isInteger(resolution?.failureIndex) || resolution.failureIndex < 0 || resolution.failureIndex >= failures.length || !text(resolution.reason) || !/^\d{4}-\d{2}-\d{2}T/u.test(resolution.resolvedAt ?? '') || !Number.isFinite(Date.parse(resolution.resolvedAt)) || resolved.has(resolution.failureIndex)) add('structure', 'FAILURE_RESOLUTION_INVALID', '$.run.failureResolutions', '失败解决记录须唯一引用已有失败，并记录理由和有效时间', '保留失败原文，追加实际恢复结果。');
+    else resolved.add(resolution.failureIndex);
+  }
+  for (const [index, failure] of failures.entries()) {
+    if (resolved.has(index)) continue;
     const category = contract.issueCategories.includes(failure?.category) ? failure.category : 'unknown';
     add(category, 'HOST_FAILURE', '$.run.failures', failure?.message || '宿主报告失败，原因未知', '保留原始错误；恢复工具或网络后另行记录结果。', null, 'pending');
   }

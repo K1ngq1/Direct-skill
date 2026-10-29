@@ -12,6 +12,10 @@ description: Use the shared storyboard workflow to create linked character, scen
 ```text
 node "storyboard-workbench/scripts/runtime.mjs" doctor
 node "storyboard-workbench/scripts/runtime.mjs" rules ingest --adapter workbuddy
+node "storyboard-workbench/scripts/runtime.mjs" rules prompt --adapter workbuddy
+node "storyboard-workbench/scripts/runtime.mjs" rules review --adapter workbuddy
 ```
 
 按共用 Skill 切换后续阶段，读取命令列出的规则。WorkBuddy 客户端及实际模型的工具能力需在本次运行验证；无法执行时保留待校验 JSON 并标“未执行硬校验”。模型规则按实际配置显式选择，不接管 API，也不授权额外媒体任务。
+
+创作与独立核对均按对应阶段读取[共用表达规则](../../../storyboard-workbench/references/prompt-language.md#四步表达核对)，具体要求只在共用文件维护。上述命令沿用默认模型；实际已知时按适配说明追加 --model。

@@ -60,7 +60,52 @@ export function loadRules({ skillRoot = defaultRoot, stage = 'all' } = {}) {
 
 export function loadRuleSnapshot(options = {}) { return loadRules(options).snapshot; }
 
-export function loadRuntimeRules({ skillRoot = defaultRoot, stage = 'all', adapter = 'default', model = 'default' } = {}) {
+export function assertRuntimeCapabilities(run, names = []) {
+  const keys = ['fileRead', 'fileWrite', 'scriptExecution', 'imageUnderstanding', 'structuredOutput', 'toolUse'];
+  const object = value => value !== null && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value)) && Reflect.ownKeys(value).every(key => {
+    const property = Object.getOwnPropertyDescriptor(value, key);
+    return typeof key === 'string' && property?.enumerable === true && Object.hasOwn(property, 'value');
+  });
+  const reject = (message, code = 'CAPABILITY_OBSERVATION_INVALID', category = 'structure') => {
+    throw Object.assign(new Error(message), { issue: { category, code, path: '$.run.capabilities', entityId: null, severity: 'error', message, requirement: '仅登记本次实际观察的能力、证据和时间；未知能力保留 unknown。' } });
+  };
+  if (!Array.isArray(names) || Array.from(names).some(name => !keys.includes(name))) reject('能力检查名称无效');
+  if (run === undefined) return;
+  if (!object(run) || (Object.hasOwn(run, 'capabilities') && !object(run.capabilities)) || (Object.hasOwn(run, 'capabilityObservations') && !object(run.capabilityObservations))) reject('运行能力记录须为对象');
+  const capabilities = run.capabilities ?? {}, observations = run.capabilityObservations ?? {};
+  for (const name of new Set([...Object.keys(capabilities), ...Object.keys(observations)])) {
+    if (!keys.includes(name) || !['unknown', 'supported', 'unsupported'].includes(capabilities[name])) reject(`能力状态无效：${name}`);
+    // Older v2 records may lack evidence; retaining them does not verify model capability.
+    if (!Object.hasOwn(run, 'capabilityObservations')) continue;
+    const row = observations[name];
+    if (capabilities[name] === 'unknown' && !Object.hasOwn(observations, name)) continue;
+    if (!object(row) || Object.keys(row).some(key => !['status', 'evidence', 'observedAt'].includes(key)) || !['supported', 'unsupported'].includes(row.status) || row.status !== capabilities[name] || typeof row.evidence !== 'string' || !row.evidence.trim() || typeof row.observedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T/u.test(row.observedAt) || !Number.isFinite(Date.parse(row.observedAt))) reject(`能力观察缺少有效状态、证据或时间：${name}`);
+  }
+  for (const name of names) if (capabilities[name] === 'unsupported') reject(`当前运行环境明确不支持 ${name}，停止该操作。`, 'RUNTIME_CAPABILITY_UNSUPPORTED', 'unsupported');
+}
+
+function chunkRules(loaded, limit, selected) {
+  if (!Number.isSafeInteger(limit) || limit < 2 || !Number.isSafeInteger(selected) || selected < 1) throw failure('structure', 'ruleChunkChars', '规则正文预算须为至少2的安全整数，chunk须为正整数。', '显式提供规则正文字符预算；预算不是模型 token 上下文容量。', 'RULE_CHUNK_INVALID');
+  const chunks = [], bodies = [];
+  for (const [scope, files] of [['rules', loaded.files], ['adaptation', loaded.adaptation.files]]) for (const file of files) {
+    let start = 0;
+    while (start < file.text.length) {
+      let current = chunks.at(-1);
+      if (!current || current.chars === limit) { current = { index: chunks.length + 1, chars: 0, parts: [] }; chunks.push(current); bodies.push([]); }
+      let end = Math.min(file.text.length, start + limit - current.chars);
+      if (end < file.text.length && /[\uD800-\uDBFF]/u.test(file.text[end - 1]) && /[\uDC00-\uDFFF]/u.test(file.text[end])) end--;
+      if (end === start) { chunks.push({ index: chunks.length + 1, chars: 0, parts: [] }); bodies.push([]); continue; }
+      const part = { scope, path: file.path, sha256: file.sha256, start, end };
+      current.parts.push(part); bodies.at(-1).push({ ...part, text: file.text.slice(start, end) }); current.chars += end - start; start = end;
+    }
+  }
+  if (selected > chunks.length) throw failure('structure', 'chunk', `规则块不存在：${selected}；共${chunks.length}块。`, '按 ruleDelivery.chunks 选择已有块，不跳过尚未读取的正文。', 'RULE_CHUNK_INVALID');
+  const fingerprints = files => files.map(({ text, ...file }) => file);
+  return { ...loaded, files: fingerprints(loaded.files), adaptation: { ...loaded.adaptation, files: fingerprints(loaded.adaptation.files) },
+    ruleDelivery: { mode: 'chunked', ruleChunkChars: limit, index: selected, count: chunks.length, chunks, parts: bodies[selected - 1], unit: 'UTF-16 code units', note: '只限制本块规则正文；元数据及会话历史不计入。全部块读完后再执行，原文件正文未删减。' } };
+}
+
+export function loadRuntimeRules({ skillRoot = defaultRoot, stage = 'all', adapter = 'default', model = 'default', observations = {}, ruleChunkChars, chunk } = {}) {
   const loaded = loadRules({ skillRoot, stage }), adapterManifestPath = 'adapters/manifest.json';
   const bytes = fs.readFileSync(localFile(skillRoot, adapterManifestPath)), manifest = parseJson(bytes, adapterManifestPath);
   const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -83,12 +128,19 @@ export function loadRuntimeRules({ skillRoot = defaultRoot, stage = 'all', adapt
     const content = fs.readFileSync(localFile(skillRoot, relative, adapterManifestPath));
     return { path: relative, sha256: sha256(content), text: content.toString('utf8') };
   });
-  return { ...loaded,
+  if (!object(observations)) throw failure('structure', 'observations', '能力观察须为对象。', '提供能力名与实际状态、证据、时间。', 'CAPABILITY_OBSERVATION_INVALID');
+  const run = { platform: selectedAdapter === 'default' ? 'unknown' : selectedAdapter, model: selectedModel === 'default' ? null : selectedModel,
+    capabilities: Object.fromEntries(['fileRead', 'fileWrite', 'scriptExecution', 'imageUnderstanding', 'structuredOutput', 'toolUse'].map(name => [name, observations[name]?.status ?? 'unknown'])),
+    capabilityObservations: observations };
+  assertRuntimeCapabilities(run);
+  run.capabilityObservations = structuredClone(observations);
+  const result = { ...loaded,
     adaptation: { requested: { adapter, model }, selected: { adapter: selectedAdapter, model: selectedModel },
       manifest: { path: adapterManifestPath, sha256: sha256(bytes) }, files, warnings },
-    run: { platform: selectedAdapter === 'default' ? 'unknown' : selectedAdapter, model: selectedModel === 'default' ? null : selectedModel,
-      capabilities: Object.fromEntries(['fileRead', 'fileWrite', 'scriptExecution', 'imageUnderstanding', 'structuredOutput', 'toolUse'].map(name => [name, 'unknown'])) }
+    run
   };
+  if (chunk !== undefined && ruleChunkChars === undefined) throw failure('structure', 'chunk', 'chunk须与ruleChunkChars共同指定。', '未给预算时沿用完整规则输出。', 'RULE_CHUNK_INVALID');
+  return ruleChunkChars === undefined ? result : chunkRules(result, ruleChunkChars, chunk === undefined ? 1 : chunk);
 }
 
 export function doctor({ skillRoot = defaultRoot, project } = {}) {
@@ -157,26 +209,33 @@ function main(args) {
     const stage = rest[0], options = {};
     for (let index = 1; index < rest.length; index += 2) {
       const flag = rest[index], value = rest[index + 1], name = flag.slice(2);
-      if (!['--adapter', '--model', '--output'].includes(flag) || Object.hasOwn(options, name) || !value || value.startsWith('--')) {
-        throw failure('unsupported', 'arguments', `无效、重复或缺值的参数：${flag}`, '使用 --adapter <ID>、--model <ID>、--output <new-file>；每项最多一次，顺序不限。', 'RULE_ARGUMENT_INVALID');
+      if (!['--adapter', '--model', '--output', '--observations', '--rule-chunk-chars', '--chunk'].includes(flag) || Object.hasOwn(options, name) || !value || value.startsWith('--')) {
+        throw failure('unsupported', 'arguments', `无效、重复或缺值的参数：${flag}`, '使用 --adapter/--model/--output/--observations/--rule-chunk-chars/--chunk；每项最多一次，顺序不限。', 'RULE_ARGUMENT_INVALID');
       }
       options[name] = value;
     }
-    const loaded = loadRuntimeRules({ stage, adapter: options.adapter, model: options.model });
+    const observations = options.observations ? parseJson(fs.readFileSync(options.observations), options.observations) : undefined;
+    const numeric = name => {
+      if (options[name] === undefined) return undefined;
+      if (!/^[1-9]\d*$/u.test(options[name]) || !Number.isSafeInteger(Number(options[name]))) throw failure('structure', name, `${name}须为正安全整数。`, '提供不带小数或符号的十进制整数。', 'RULE_CHUNK_INVALID');
+      return Number(options[name]);
+    };
+    const loaded = loadRuntimeRules({ stage, adapter: options.adapter, model: options.model, observations, ruleChunkChars: numeric('rule-chunk-chars'), chunk: numeric('chunk') });
     result = { status: 'provided', stage, providedAt: new Date().toISOString(), ...loaded,
       canonicalSnapshot: stage === 'all' ? loaded.snapshot : loadRuleSnapshot(),
-      note: 'files/snapshot 是共用阶段规则，canonicalSnapshot 是全规则版本，不因适配选择改变；adaptation.files 按 default、宿主、模型顺序提供差异说明。run 仅记录显式选择，能力未探测均为 unknown，模型系列不代表实际版本。提供不代表 Agent 已阅读、理解或平台实测通过。' };
+      note: 'files/snapshot 是共用阶段规则，canonicalSnapshot 是全规则版本，不因适配选择改变；adaptation.files 按 default、宿主、模型顺序提供差异说明。能力只使用显式观察，未观察项为 unknown。分块时完整正文按 ruleDelivery.parts 逐块读取。提供不代表 Agent 已阅读、理解或平台实测通过。' };
     if (options.output) {
       const target = path.resolve(options.output);
       try { fs.writeFileSync(target, JSON.stringify(result, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' }); }
       catch (error) { throw failure('runtime', target, error.code === 'EEXIST' ? '输出文件已存在，拒绝覆盖。' : error.message, '选择新的记录文件名，并确保父目录已存在。', error.code === 'EEXIST' ? 'RULE_OUTPUT_EXISTS' : 'RULE_OUTPUT_WRITE'); }
       result = { status: 'provided', output: target, stage, snapshot: loaded.snapshot, canonicalSnapshot: result.canonicalSnapshot,
-        adaptation: { ...loaded.adaptation, files: loaded.adaptation.files.map(({ path: name, sha256: digest }) => ({ path: name, sha256: digest })) }, run: loaded.run };
+        adaptation: { ...loaded.adaptation, files: loaded.adaptation.files.map(({ path: name, sha256: digest }) => ({ path: name, sha256: digest })) }, run: loaded.run,
+        ...(loaded.ruleDelivery ? { ruleDelivery: { ...loaded.ruleDelivery, parts: loaded.ruleDelivery.parts.map(({ text, ...part }) => part) } } : {}) };
     }
-  } else throw failure('unsupported', 'command', '用法：runtime.mjs doctor [project] | rules <all|ingest|plan|prompt|review|export|legacy> [--adapter <ID>] [--model <ID>] [--output <new-file>]', '按用法运行；默认不识别宿主，未指定适配使用 default。doctor 不写文件，rules 仅在明确指定新文件时写入。');
+  } else throw failure('unsupported', 'command', '用法：runtime.mjs doctor [project] | rules <stage> [--adapter <ID>] [--model <ID>] [--observations <file>] [--rule-chunk-chars <N>] [--chunk <N>] [--output <new-file>]', '按用法运行；默认不识别宿主，未指定适配使用 default。doctor 不写文件，rules 仅在明确指定新文件时写入。');
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { main(process.argv.slice(2)); }
   catch (error) {
     process.stderr.write(JSON.stringify({ status: 'failed', issues: [error.issue ?? failure('runtime', '', error.message, '保留输入并核对文件权限和运行环境。').issue] }, null, 2) + '\n');

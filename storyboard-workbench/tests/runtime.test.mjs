@@ -6,7 +6,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { loadRules, loadRuleSnapshot, loadRuntimeRules, doctor } from '../scripts/runtime.mjs';
+import { loadRules, loadRuleSnapshot, loadRuntimeRules, assertRuntimeCapabilities, doctor } from '../scripts/runtime.mjs';
 
 const cli = fileURLToPath(new URL('../scripts/runtime.mjs', import.meta.url));
 function fixture(t) {
@@ -170,6 +170,22 @@ test('explicit host and model selections share identical core rules and do not c
   assert.deepEqual(loadRuntimeRules({ skillRoot: root, stage: 'plan', adapter: 'codex' }).snapshot, core.snapshot);
 });
 
+test('registered provider skills load with every host without changing shared contracts or claiming capabilities', () => {
+  const registry = JSON.parse(fs.readFileSync(new URL('../adapters/manifest.json', import.meta.url), 'utf8'));
+  const core = loadRules({ stage: 'plan' });
+  for (const adapter of Object.keys(registry.hosts)) for (const [model, filename] of Object.entries(registry.models)) {
+    if (!filename) continue;
+    const loaded = loadRuntimeRules({ stage: 'plan', adapter, model });
+    assert.deepEqual(loaded.adaptation.selected, { adapter, model });
+    assert.deepEqual(loaded.snapshot, core.snapshot);
+    assert.deepEqual(loaded.files, core.files);
+    assert.equal(loaded.adaptation.files.at(-1).path, filename);
+    assert.deepEqual(loaded.adaptation.warnings, []);
+    assert.equal(loaded.run.model, model);
+    assert.ok(Object.values(loaded.run.capabilities).every(value => value === 'unknown'));
+  }
+});
+
 test('unknown hosts and models fall back independently and GLM is never guessed to be a host', t => {
   const { root } = fixture(t);
   const mistakenHost = loadRuntimeRules({ skillRoot: root, adapter: 'glm' });
@@ -212,5 +228,97 @@ test('real adapter CLI accepts either option order, records fallback and rejects
   for (const args of [['--adapter'], ['--model', '--adapter', 'codex'], ['--adapter', 'codex', '--adapter', 'workbuddy'], ['--unknown', 'value']]) {
     const invalid = invoke(...args); assert.equal(invalid.status, 1);
     assert.equal(JSON.parse(invalid.stderr).issues[0].code, 'RULE_ARGUMENT_INVALID');
+  }
+});
+
+test('observed capabilities drive a standalone guard without inferring capabilities from a model', t => {
+  const { root } = fixture(t), observations = {
+    toolUse: { status: 'unsupported', evidence: '本次工具请求返回不支持。', observedAt: '2026-10-27T00:00:00Z' },
+    fileRead: { status: 'supported', evidence: '本次读回原稿内容。', observedAt: '2026-10-27T00:00:00Z' }
+  };
+  const loaded = loadRuntimeRules({ skillRoot: root, model: 'glm', observations });
+  assert.equal(loaded.run.capabilities.toolUse, 'unsupported');
+  assert.equal(loaded.run.capabilities.imageUnderstanding, 'unknown');
+  assert.deepEqual(loaded.run.capabilityObservations, observations);
+  const standalone = Function(`return (${assertRuntimeCapabilities.toString()})`)();
+  standalone(); standalone(loaded.run, ['fileRead']);
+  assert.throws(() => standalone(loaded.run, ['toolUse']), error => error.issue.code === 'RUNTIME_CAPABILITY_UNSUPPORTED');
+  for (const invalid of [null, { toolUse: true }, { toolUse: { status: 'supported' } }, { invented: observations.fileRead }, { fileRead: { ...observations.fileRead, observedAt: 'yesterday' } }]) {
+    assert.throws(() => loadRuntimeRules({ skillRoot: root, observations: invalid }), error => error.issue.code === 'CAPABILITY_OBSERVATION_INVALID');
+  }
+  standalone({ capabilities: { toolUse: 'supported' } });
+  assert.throws(() => standalone({ capabilities: { toolUse: 'unsupported' } }, ['toolUse']), error => error.issue.code === 'RUNTIME_CAPABILITY_UNSUPPORTED');
+  assert.throws(() => standalone({ capabilities: { toolUse: 'BANANA' } }), error => error.issue.code === 'CAPABILITY_OBSERVATION_INVALID');
+  assert.throws(() => standalone({ capabilities: { toolUse: 'supported' }, capabilityObservations: {} }), error => error.issue.code === 'CAPABILITY_OBSERVATION_INVALID');
+});
+
+test('capability guards reject unpersistable records before interpreting observed support', t => {
+  const { root } = fixture(t), row = { status: 'supported', evidence: '本次工具读取成功。', observedAt: '2026-10-27T00:00:00Z' };
+  const invalid = [
+    null, [], new Date(), new Map(), Object.create({ capabilities: { toolUse: 'supported' } }),
+    { capabilities: undefined }, { capabilityObservations: undefined },
+    { capabilities: new Map([['toolUse', 'unsupported']]) },
+    { capabilities: Object.create({ toolUse: 'unsupported' }) },
+    Object.defineProperty({}, 'capabilities', { value: { toolUse: 'unsupported' } }),
+    { capabilities: { get toolUse() { throw new Error('能力访问器不应执行'); } } },
+    { capabilities: { toolUse: 'supported' }, capabilityObservations: Object.create({ toolUse: row }) },
+    { capabilities: { toolUse: 'supported' }, capabilityObservations: { toolUse: Object.create(row) } },
+    { capabilities: { toolUse: 'supported' }, capabilityObservations: { toolUse: Object.defineProperty({ ...row }, 'evidence', { value: row.evidence, enumerable: false }) } },
+    { capabilities: { [Symbol('toolUse')]: 'unsupported' } },
+    { capabilities: { toolUse: 'unknown' }, capabilityObservations: { toolUse: undefined } }
+  ];
+  for (const guard of [assertRuntimeCapabilities, Function(`return (${assertRuntimeCapabilities.toString()})`)()]) {
+    for (const run of invalid) assert.throws(() => guard(run, ['toolUse']), error => error.issue.code === 'CAPABILITY_OBSERVATION_INVALID');
+    assert.throws(() => guard(undefined, new Array(1)), /能力检查名称无效/);
+    guard(undefined, ['toolUse']);
+    guard({ capabilities: Object.assign(Object.create(null), { toolUse: 'supported' }), capabilityObservations: Object.assign(Object.create(null), { toolUse: row }) }, ['toolUse']);
+  }
+  for (const observations of [new Date(), new Map(), Object.create({ toolUse: row }), { toolUse: Object.create(row) }]) {
+    assert.throws(() => loadRuntimeRules({ skillRoot: root, observations }), error => error.issue.code === 'CAPABILITY_OBSERVATION_INVALID');
+  }
+});
+
+test('explicit rule chunks preserve every source character, fingerprints and surrogate pairs', t => {
+  const { root } = fixture(t);
+  fs.appendFileSync(path.join(root, 'core.md'), '😀中文规则，不能截断或遗漏。\n', 'utf8');
+  const complete = loadRuntimeRules({ skillRoot: root, stage: 'plan', adapter: 'codex', model: 'glm' });
+  const first = loadRuntimeRules({ skillRoot: root, stage: 'plan', adapter: 'codex', model: 'glm', ruleChunkChars: 7 });
+  assert.equal(first.ruleDelivery.index, 1);
+  assert.ok(first.files.every(file => !Object.hasOwn(file, 'text')));
+  assert.ok(first.adaptation.files.every(file => !Object.hasOwn(file, 'text')));
+  assert.deepEqual(first.snapshot, complete.snapshot);
+  const reconstructed = new Map();
+  for (let chunk = 1; chunk <= first.ruleDelivery.count; chunk++) {
+    const part = loadRuntimeRules({ skillRoot: root, stage: 'plan', adapter: 'codex', model: 'glm', ruleChunkChars: 7, chunk });
+    assert.ok(part.ruleDelivery.parts.reduce((count, row) => count + row.text.length, 0) <= 7);
+    for (const row of part.ruleDelivery.parts) {
+      assert.equal(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/u.test(row.text), false);
+      const key = row.scope + ':' + row.path;
+      assert.equal(row.start, (reconstructed.get(key) ?? '').length);
+      reconstructed.set(key, (reconstructed.get(key) ?? '') + row.text);
+    }
+  }
+  for (const [scope, files] of [['rules', complete.files], ['adaptation', complete.adaptation.files]]) for (const file of files) assert.equal(reconstructed.get(scope + ':' + file.path), file.text);
+  for (const args of [{ ruleChunkChars: 1 }, { ruleChunkChars: 4, chunk: 0 }, { ruleChunkChars: 4, chunk: null }, { chunk: 1 }, { ruleChunkChars: 7, chunk: first.ruleDelivery.count + 1 }]) {
+    assert.throws(() => loadRuntimeRules({ skillRoot: root, ...args }), error => error.issue.code === 'RULE_CHUNK_INVALID');
+  }
+});
+
+test('CLI uses an explicit observation file and returns only the selected bounded rule body', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), '分镜 capability CLI '));
+  const observations = path.join(directory, '观察.json'), output = path.join(directory, '规则块.json');
+  fs.writeFileSync(observations, JSON.stringify({ toolUse: { status: 'unsupported', evidence: '本次明确不支持工具。', observedAt: '2026-10-27T00:00:00Z' } }), 'utf8');
+  t.after(() => { fs.unlinkSync(observations); if (fs.existsSync(output)) fs.unlinkSync(output); fs.rmdirSync(directory); });
+  const invoke = (...args) => spawnSync(process.execPath, [cli, 'rules', 'plan', ...args], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  const result = invoke('--observations', observations, '--rule-chunk-chars', '1024', '--chunk', '2', '--output', output);
+  assert.equal(result.status, 0, result.stderr);
+  const saved = JSON.parse(fs.readFileSync(output, 'utf8')), summary = JSON.parse(result.stdout);
+  assert.equal(saved.run.capabilities.toolUse, 'unsupported');
+  assert.equal(saved.ruleDelivery.index, 2);
+  assert.ok(saved.ruleDelivery.parts.reduce((count, row) => count + row.text.length, 0) <= 1024);
+  assert.ok(summary.ruleDelivery.parts.every(row => !Object.hasOwn(row, 'text')));
+  for (const args of [['--chunk', '1'], ['--rule-chunk-chars', '1'], ['--rule-chunk-chars', '1e3'], ['--rule-chunk-chars', '1024', '--chunk', '999999']]) {
+    const invalid = invoke(...args); assert.equal(invalid.status, 1);
+    assert.equal(JSON.parse(invalid.stderr).issues[0].code, 'RULE_CHUNK_INVALID');
   }
 });
