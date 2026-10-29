@@ -76,6 +76,26 @@ test('missing, unsupported, malformed and escaping rule sources produce distinct
   save();
 });
 
+test('on-demand rules stay out of stage bodies but remain validated and fingerprinted in the canonical snapshot', t => {
+  const { root, manifest, save } = fixture(t);
+  manifest.stages.plan = [];
+  manifest.onDemand = ['plan.md', 'plan.md']; save();
+  const stage = loadRules({ skillRoot: root, stage: 'prompt' });
+  const before = loadRuleSnapshot({ skillRoot: root });
+  assert.ok(!stage.files.some(file => file.path === 'plan.md'));
+  assert.equal(before.files.filter(file => file.path === 'plan.md').length, 1);
+  assert.ok(!before.files.some(file => file.path === 'legacy.md'));
+  fs.appendFileSync(path.join(root, 'plan.md'), '按需规则的新限制', 'utf8');
+  assert.deepEqual(loadRules({ skillRoot: root, stage: 'prompt' }), stage);
+  assert.notEqual(loadRuleSnapshot({ skillRoot: root }).rulesHash, before.rulesHash);
+  fs.unlinkSync(path.join(root, 'plan.md'));
+  assert.throws(() => loadRuleSnapshot({ skillRoot: root }), error => error.issue.code === 'REQUIRED_FILE_MISSING');
+  manifest.onDemand = ['../outside.md']; save();
+  assert.throws(() => loadRuleSnapshot({ skillRoot: root }), error => error.issue.code === 'LOCAL_PATH_INVALID');
+  manifest.onDemand = null; save();
+  assert.throws(() => loadRules({ skillRoot: root }), error => error.issue.code === 'RULE_MANIFEST_INVALID');
+});
+
 test('real rules include the v2 contract and CLI records cannot overwrite existing files', t => {
   const rules = loadRules();
   assert.equal(rules.snapshot.rulesVersion, 'storyboard-rules-v1');

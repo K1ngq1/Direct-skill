@@ -13,6 +13,7 @@
 /docs/*
 !/docs/FIRST-RELEASE.md
 !/docs/MEDIA-PIPELINE-VERIFICATION.md
+!/docs/PROMPT-LANGUAGE-VERIFICATION.md
 !/.github/
 /.github/*
 !/.github/workflows/

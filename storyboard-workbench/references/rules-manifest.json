@@ -2,17 +2,17 @@
   "schemaVersion": 1,
   "rulesVersion": "storyboard-rules-v1",
   "core": [
-    "SKILL.md",
-    "references/visual-workflow.md"
+    "SKILL.md"
   ],
   "stages": {
-    "ingest": [],
-    "plan": ["references/directing.md", "references/character-prompts.md", "references/scene-art-direction.md", "references/video-workflow.md", "schemas/visual-plan-v2.json"],
-    "prompt": ["references/prompt-language.md", "references/humanizer-zh/SKILL.md", "references/scene-art-direction.md", "references/video-workflow.md"],
-    "review": ["references/prompt-language.md", "references/visual-rubric.md", "references/scene-art-direction.md", "references/video-workflow.md", "schemas/visual-plan-v2.json"],
-    "export": ["references/video-workflow.md", "references/media-execution.md", "schemas/visual-plan-v2.json"],
+    "ingest": ["references/input-archive.md"],
+    "plan": ["references/directing.md", "references/character-prompts.md", "references/scene-art-direction.md", "schemas/visual-plan-v2.json"],
+    "prompt": ["references/prompt-language.md", "references/humanizer-zh/SKILL.md"],
+    "review": ["references/prompt-language.md", "references/visual-rubric.md", "schemas/visual-plan-v2.json"],
+    "export": ["references/visual-workflow.md", "schemas/visual-plan-v2.json"],
     "legacy": ["references/legacy-workbench.md", "references/data-contract.md", "references/production-framework.md", "references/story-planning.md"]
   },
+  "onDemand": ["references/video-workflow.md", "references/media-execution.md"],
   "scripts": [
     "scripts/runtime.mjs",
     "scripts/import_excel.py",

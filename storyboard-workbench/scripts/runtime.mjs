@@ -36,8 +36,9 @@ function readManifest(skillRoot) {
   const paths = value => Array.isArray(value) && value.every(item => typeof item === 'string');
   if (manifest?.schemaVersion !== 1 || typeof manifest.rulesVersion !== 'string' || !manifest.rulesVersion.trim() ||
       !paths(manifest.core) || !manifest.core.length || !paths(manifest.scripts) || !manifest.scripts.length ||
+      (Object.hasOwn(manifest, 'onDemand') && !paths(manifest.onDemand)) ||
       !manifest.stages || Object.keys(manifest.stages).length !== stages.length || stages.some(stage => !paths(manifest.stages[stage]))) {
-    throw failure('structure', manifestPath, '规则清单的版本、core、stages 或 scripts 无效。', '恢复有效的随包规则清单；阶段必须为 ingest/plan/prompt/review/export/legacy。', 'RULE_MANIFEST_INVALID');
+    throw failure('structure', manifestPath, '规则清单的版本、core、stages、onDemand 或 scripts 无效。', '恢复有效的随包规则清单；阶段必须为 ingest/plan/prompt/review/export/legacy，onDemand 可省略或为路径数组。', 'RULE_MANIFEST_INVALID');
   }
   return { manifest, bytes };
 }
@@ -45,7 +46,7 @@ function readManifest(skillRoot) {
 export function loadRules({ skillRoot = defaultRoot, stage = 'all' } = {}) {
   if (stage !== 'all' && !stages.includes(stage)) throw failure('unsupported', 'stage', `不支持的规则阶段：${stage}`, `选择 all 或 ${stages.join('/')}。`, 'RULE_STAGE_UNSUPPORTED');
   const { manifest, bytes } = readManifest(skillRoot);
-  const names = [...new Set([manifestPath, ...manifest.core, ...(stage === 'all' ? stages.filter(name => name !== 'legacy').flatMap(name => manifest.stages[name]) : manifest.stages[stage])])].sort();
+  const names = [...new Set([manifestPath, ...manifest.core, ...(stage === 'all' ? [...stages.filter(name => name !== 'legacy').flatMap(name => manifest.stages[name]), ...(manifest.onDemand ?? [])] : manifest.stages[stage])])].sort();
   const files = names.map(relative => {
     const content = relative === manifestPath ? bytes : fs.readFileSync(localFile(skillRoot, relative));
     if (relative.endsWith('.json')) parseJson(content, relative);
