@@ -14,16 +14,29 @@
 
 ## 安装与使用
 
-需要 Node.js 20+、Python 3.10+。完整克隆仓库，保留相对目录：
+首次使用需要 Python 3.10+、Node.js 20+；Excel 依赖一次性安装 `python -m pip install openpyxl`。无需 Git 或 npm install。
 
-```text
-git clone https://github.com/K1ngq1/Direct-skill.git
-cd Direct-skill
-python -m pip install -r requirements.txt
-node "storyboard-workbench/scripts/runtime.mjs" doctor
+**Windows：在 PowerShell 运行这一条安装命令：**
+
+```powershell
+irm https://github.com/K1ngq1/Direct-skill/releases/latest/download/install.py | python -
 ```
 
-ExcelJS 已随包提供，无需 `npm install`。`STORYBOARD_PYTHON` 可指定已有 Python 解释器的绝对路径；导入时使用同一解释器。
+macOS / Linux：
+
+```sh
+curl -fsSL https://github.com/K1ngq1/Direct-skill/releases/latest/download/install.py | python3 -
+```
+
+安装器只下载约560 KiB的独立运行包，校验ZIP和逐文件SHA-256，默认安装到 `$CODEX_HOME/skills/storyboard-workbench`，未设置时为 `~/.codex/skills/storyboard-workbench`。已有同名安装会保留并提示，不覆盖。下一轮可用 `$storyboard-workbench` 调用；其他宿主可在命令末尾追加 `--dest <宿主的skills目录>`。
+
+也可直接下载[独立ZIP](https://github.com/K1ngq1/Direct-skill/releases/latest/download/storyboard-workbench.zip)，把其中的 `storyboard-workbench` 文件夹放入宿主的skills目录。独立包入口已包含全部相对资源，不使用开发仓库的薄入口。
+
+安装包只含规则、合同、脚本及必需运行库；**不含资产库、用户项目、测试样例、历史证据、Git历史或旧网页界面**。保留ExcelJS和少量被核心脚本引用的工作流辅助代码，以保证导出与任务执行可用。包内 `package-manifest.json` 记录源码commit及文件清单。
+
+**使用链路：**提供TXT/Markdown粗稿或XLSX → 归档与全片规划 → 生成人物／场景／分镜Prompt → 四步润色与语义核对 → 固定Excel → 按授权保存并提交MCP／生图任务 → 回执、恢复和集中回写。媒体使用宿主实际连接的工具，安装不会配置账号、API密钥或MCP服务；缺少工具时交付待提交请求。
+
+安装后所有脚本路径以Skill安装目录解析，项目和输出保存在用户工作目录。`STORYBOARD_PYTHON` 可指定已有解释器的绝对路径。启动检查和命令详见共用Skill。
 
 在项目会话中要求 Agent：“读取 `storyboard-workbench/SKILL.md`，把本次脚本整理成分镜 Excel。”提供原稿、目标时长与已确认参考。脚本不会代替 Agent 创作正文：
 
@@ -44,7 +57,7 @@ node "storyboard-workbench/scripts/visual.mjs" export "projects/demo"
 | WorkBuddy | `.codebuddy/skills/storyboard-workbench/` |
 | 其他宿主 | 显式读取共用 Skill，使用 `--adapter default` |
 
-这些入口依赖完整仓库，不能单独复制到全局目录；跨项目使用须携带完整 Skill 并重新定位。自动发现不可用时直接指定共用 Skill。宿主与模型分别选择，API 使用用户已有配置；支持项、观察能力及降级方式见[适配参考](storyboard-workbench/adapters/README.md)。
+上表是开发仓库的项目薄入口，依赖完整仓库，不能单独复制到全局目录；发布ZIP已有独立入口，可直接安装。自动发现不可用时直接指定共用 Skill。宿主与模型分别选择，API 使用用户已有配置；支持项、观察能力及降级方式见[适配参考](storyboard-workbench/adapters/README.md)。
 
 ## 范围与验证状态
 
@@ -60,6 +73,8 @@ node "storyboard-workbench/scripts/visual.mjs" export "projects/demo"
 npm test
 python -m unittest discover -s storyboard-workbench/tests -p "test_import*.py"
 ```
+
+发布维护：用 `python distribution/build.py --output <新文件.zip>` 从已提交的公开运行文件构建；推送 `skill-v*` 标签后，GitHub Actions验证独立包并发布ZIP、校验文件和安装器。资产库永远不参与打包扫描。
 
 按改动范围选择必要检查。新增宿主或模型在[适配注册表](storyboard-workbench/adapters/manifest.json)登记，复用现有加载器；业务规则仅在 Skill 指向的权威位置修改。测试使用合成输入，不提交私有素材、真实人评、凭据或个人绝对路径。
 

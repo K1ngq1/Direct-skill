@@ -8,6 +8,7 @@
 !/LICENSE
 !/package.json
 !/requirements.txt
+!/distribution/
 !/storyboard-workbench/
 !/docs/
 /docs/*

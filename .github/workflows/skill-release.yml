@@ -1,0 +1,30 @@
+name: Publish standalone skill
+on:
+  push:
+    tags: ['skill-v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r requirements.txt
+      - run: python -m unittest discover -s distribution -p 'test_*.py'
+      - run: python distribution/build.py --output release/storyboard-workbench.zip
+      - name: Publish ZIP and installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          release/storyboard-workbench.zip
+          release/storyboard-workbench.zip.sha256
+          distribution/install.py
+          --title "Storyboard Skill $GITHUB_REF_NAME"
+          --notes "Standalone runtime only. No Git clone, private assets, tests, Git history or browser UI. Requires Python 3.10+, Node 20+ and openpyxl. Connected MCP/image tools remain host-managed."
