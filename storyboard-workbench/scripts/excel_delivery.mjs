@@ -7,7 +7,7 @@ import { isDeepStrictEqual } from 'node:util';
 import ExcelJS from './vendor/exceljs.cjs';
 import { ProjectError } from './project.mjs';
 import { localFolder } from './visual_state.mjs';
-import { textLines } from './export_visual_excel.mjs';
+import { deliveryPrompts, textLines } from './export_visual_excel.mjs';
 import { doctor } from './runtime.mjs';
 
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -228,9 +228,10 @@ export async function deliverExcel(directory, { file, log, planHash, workflowHas
     let source = { ...file.deliveryData, imageSlots: nextImages }, bytes = pointer || bindWorkbook ? fs.readFileSync(workbookPath) : file.buffer;
     const originalBytes = bytes;
     const beforeHash = pointer || bindWorkbook ? hash(bytes) : null;
-    let inheritedOpinions = [];
+    let inheritedOpinions = [], layout = bindWorkbook ? 'existing' : 'new';
     if (pointer) {
       const record = read(inside(directory, pointer.record)), workbook = await load(bytes);
+      layout = beforeHash === record.baseline.sha256 ? record.layout ?? 'existing' : 'existing';
       if (record.projectId !== file.deliveryData.projectId) fail('固定Excel属于不同项目');
       const baselineBytes = fs.readFileSync(inside(directory, record.baseline.path));
       if (hash(baselineBytes) !== record.baseline.sha256) fail('实际交付基线损坏，不能更新固定Excel');
@@ -264,7 +265,7 @@ export async function deliverExcel(directory, { file, log, planHash, workflowHas
     const snapshot = path.join(snapshots, afterHash + '.xlsx');
     immutable(snapshot, bytes);
     const record = { schemaVersion: 1, projectId: source.projectId, workbookPath: relative(directory, workbookPath),
-      planHash, workflowHash, source, inheritedOpinions, baseline: { path: relative(directory, snapshot), sha256: afterHash }, logHash: hash(log.buffer) };
+      planHash, workflowHash, source, layout, inheritedOpinions, baseline: { path: relative(directory, snapshot), sha256: afterHash }, logHash: hash(log.buffer) };
     const recordId = hash(json(record)), recordFile = path.join(records, recordId + '.json'), logFile = path.join(records, recordId + '.md');
     immutable(recordFile, json(record)); immutable(logFile, log.buffer);
     const nextPointer = { schemaVersion: 1, projectId: source.projectId, path: relative(directory, workbookPath), record: relative(directory, recordFile) };
@@ -303,4 +304,66 @@ export async function deliveryBaseline(directory, workflowHash, withRecord = fal
     return withRecord ? { buffer: bytes, record } : bytes;
   }
   return null;
+}
+
+export async function verifyExcelDelivery(directory, { plan, project, context, planHash, workflowHash }) {
+  const started = performance.now();
+  const pointerFile = inside(directory, 'excel-delivery.json');
+  const busy = () => ['excel-delivery.lock', 'excel-delivery.pending.json'].some(name => fs.existsSync(inside(directory, name)));
+  if (busy()) fail('Excel交付正在更新或等待恢复，请在导出完成后验收');
+  const pointer = read(pointerFile), recordPath = inside(directory, pointer.record);
+  const recordBytes = fs.readFileSync(recordPath), record = JSON.parse(recordBytes.toString('utf8'));
+  if (path.basename(recordPath) !== hash(recordBytes) + '.json' || pointer.path !== record.workbookPath ||
+      record.projectId !== plan.projectId || record.planHash !== planHash || record.workflowHash !== workflowHash) fail('固定Excel交付记录与当前计划或视频版本不一致');
+  const filename = inside(directory, pointer.path), bytes = fs.readFileSync(filename), book = await load(bytes);
+  checkStructure(book, record.source);
+  const issues = [], counts = {}, rowGroups = record.source.groups.filter(group => group.kind === 'row');
+  const shots = new Map(plan.shots.map(shot => [shot.id, shot]));
+  if (!isDeepStrictEqual(rowGroups.map(group => group.values[0]), [...shots.keys()])) issues.push('分镜脚本的镜号或顺序与计划不符');
+  const timeline = new Map(context.workflow?.timeline?.map(row => [row.shotId, row.seconds]));
+  for (const group of rowGroups) {
+    const id = group.values[0], cell = book.getWorksheet(group.sheet).getCell(group.rows[0], 3);
+    if (cell.value !== (timeline.get(id) ?? shots.get(id)?.seconds)) issues.push(`${group.sheet}!${cell.address} ${id} 时长与计划不符`);
+  }
+  const covered = new Set(plan.shots.flatMap(shot => shot.sourceShotIds));
+  for (const shot of project.shots) if (!covered.has(shot.id)) issues.push(`原稿镜头未覆盖：${shot.id}`);
+  const groups = record.source.groups.filter(group => group.kind === 'prompt'), expected = deliveryPrompts(plan, context);
+  const standardLayout = record.layout === 'new';
+  const firstRows = new Map();
+  if (groups.length !== expected.length) issues.push('生成Prompt分组数量与当前正文不符');
+  for (const [index, entry] of expected.entries()) {
+    const group = groups[index], id = `prompt/${entry.type}/${entry.entityId}`;
+    counts[entry.type] = (counts[entry.type] ?? 0) + 1;
+    if (group?.id !== id || group.values[1] !== entry.name) { issues.push(`${id} 分组缺失或顺序有变化`); continue; }
+    const sheet = book.getWorksheet(group.sheet), cells = group.rows.map(row => sheet.getCell(row, group.textColumn));
+    if (entry.shotId && !firstRows.has(entry.shotId)) firstRows.set(entry.shotId, group.rows[0]);
+    if (cells.some(cell => cell.value !== null && typeof cell.value !== 'string') ||
+        cells.map(cell => cell.text).join('') !== entry.text.replace(/\r\n?/g, '\n')) issues.push(`${group.sheet}!${cells[0].address} ${id} 正文不符`);
+  }
+  for (const group of rowGroups) {
+    const cell = book.getWorksheet(group.sheet).getCell(group.rows[0], 1), first = firstRows.get(group.values[0]);
+    if (standardLayout && first && cell.hyperlink !== "#'生成Prompt'!C" + first) issues.push(`${group.sheet}!${cell.address} 镜号跳转位置不符`);
+  }
+  for (const group of record.source.groups.filter(group => group.kind === 'asset')) {
+    const sheet = book.getWorksheet(group.sheet), cells = group.rows.map(row => sheet.getCell(row, group.textColumn));
+    if (cells.map(cell => cell.text).join('') !== group.values[group.textColumn - 1]) issues.push(`${sheet.name}!${cells[0].address} ${group.id} 设定与交付记录不符`);
+  }
+  let nonemptyCells = 0, yaheiWrappedCells = 0, internalLinks = 0;
+  for (const sheet of book.worksheets) {
+    if (sheet.state !== 'visible') issues.push(`${sheet.name} 工作表隐藏`);
+    sheet.eachRow(row => row.eachCell(cell => {
+      nonemptyCells++;
+      if (cell.font?.name === 'Microsoft YaHei' && cell.alignment?.wrapText === true) yaheiWrappedCells++;
+      else if (standardLayout) issues.push(`${sheet.name}!${cell.address} 默认字体或自动换行不符`);
+      if (standardLayout && cell.note !== undefined) issues.push(`${sheet.name}!${cell.address} 含批注`);
+      const link = cell.hyperlink;
+      if (!link?.startsWith('#')) return;
+      internalLinks++;
+      const target = /^#'([^']+)'!([A-Z]+[1-9]\d*)$/.exec(link);
+      if (target && !book.getWorksheet(target[1])?.findCell(target[2])?.text) issues.push(`${sheet.name}!${cell.address} 的跳转目标为空`);
+    }));
+  }
+  if (busy() || read(pointerFile).record !== pointer.record || hash(fs.readFileSync(filename)) !== hash(bytes)) fail('验收期间正式文件或交付版本发生变化，请重新回读');
+  return { status: issues.length ? 'invalid' : 'passed', issues, shots: shots.size, sourceShots: project.shots.length,
+    prompts: counts, nonemptyCells, yaheiWrappedCells, internalLinks, readbackMs: Math.round(performance.now() - started) };
 }

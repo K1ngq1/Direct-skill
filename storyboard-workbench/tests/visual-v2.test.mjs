@@ -36,7 +36,7 @@ const shot = (id, sourceId, locationId, personId, fromShotIds = []) => {
     motion: '保留站姿三秒后切镜；静帧正文只描述站定瞬间。', reuseOf: null, prompt: { text }, review: score(text), semanticReview: semantic() };
 };
 
-function fixture(t, { calibration = false, emptyScene = false, sourceText = null, configure = null } = {}) {
+function fixture(t, { calibration = false, emptyScene = false, sourceText = null, configure = null, brief = false } = {}) {
   // The Windows sandbox temp volume denies rename; keep atomic-write fixtures in this writable workspace.
   const directory = fs.mkdtempSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '导演 v2 中文 '));
   const source = path.join(directory, '原稿 文本.txt'), projectFile = path.join(directory, 'project.json'), planFile = path.join(directory, 'visual-plan.json');
@@ -93,7 +93,20 @@ function fixture(t, { calibration = false, emptyScene = false, sourceText = null
   save(projectFile, project);
   const originalInput = structuredClone(input), sourceBytes = fs.readFileSync(source), projectBytes = fs.readFileSync(projectFile);
   snapshot(1);
-  const plan = sealPlan(directory, input);
+  let plan;
+  if (brief) {
+    const draft = track(path.join(directory, 'draft.json'));
+    save(draft, input);
+    const result = spawnSync(process.execPath, [cli, 'seal', directory, draft, '--brief'], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    const { assetBindings, validation } = JSON.parse(result.stdout);
+    plan = read(planFile);
+    assert.equal(validation.shots, undefined);
+    for (const kind of ['characters', 'locations']) {
+      assert.equal(assetBindings[kind].projectId, plan.projectId);
+      assert.equal(assetBindings[kind].sourcePlanHash, assetPlanHash(plan, kind));
+    }
+  } else plan = sealPlan(directory, input);
   const bundle = (kind, filename) => save(track(path.join(directory, filename)), { schemaVersion: 1, projectId: plan.projectId, sourcePlanHash: assetPlanHash(plan, kind), ...(kind === 'locations' ? { designStageVersion: 1 } : {}),
     [kind]: plan.productionInventory[kind].map(asset => ({ assetId: asset.id, base: { mode: 'generate', text: `${asset.description}。同一对象的三个互补视角。`, referenceIds: [], basis: '本次隔离验收资产设定。' }, ...(kind === 'characters' ? { optionalDetails: [] } : { sceneDesign: {
       useAndUsers: emptyScene ? '脚本事实：空房无人，观察窗边木桌；导演补全：不新增使用者。' : '脚本事实：人物在房间站定；导演补全：桌旁留出半步停留空间。',
@@ -138,6 +151,28 @@ test('v2 seals the default plan and exports a first-sheet storyboard without cho
   assert.ok(markdown.indexOf('## T1') < markdown.indexOf('## T2') && markdown.indexOf('## T2') < markdown.indexOf('## T3'));
   assert.deepEqual(fs.readFileSync(f.source), f.sourceBytes);
   assert.deepEqual(fs.readFileSync(f.projectFile), f.projectBytes);
+});
+
+test('deliver checks the saved workbook and verify-excel reports multiple edits without writing', async t => {
+  const f = fixture(t, { brief: true });
+  const run = command => spawnSync(process.execPath, [cli, command, f.directory], { encoding: 'utf8' });
+  const delivery = run('deliver'), result = JSON.parse(delivery.stdout);
+  result.files.forEach(f.track);
+  assert.equal(delivery.status, 0, JSON.stringify(result));
+  assert.deepEqual(result.acceptance.prompts, { 静帧: 3, 人物: 2, 场景: 2 });
+  const file = result.files[0], workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(fs.readFileSync(file));
+  workbook.getWorksheet('分镜脚本').getCell('A2').value = 'T1';
+  workbook.getWorksheet('分镜脚本').getCell('C2').value = 0.5;
+  workbook.getWorksheet('生成Prompt').getCell('C2').value = '人工改写';
+  const bytes = Buffer.from(await workbook.xlsx.writeBuffer());
+  fs.writeFileSync(file, bytes);
+  const check = run('verify-excel');
+  assert.equal(check.status, 1);
+  assert.deepEqual(JSON.parse(check.stdout).acceptance.issues.sort(), [
+    '分镜脚本!A2 镜号跳转位置不符', '分镜脚本!C2 T1 时长与计划不符', '生成Prompt!C2 prompt/静帧/T1 正文不符'
+  ].sort());
+  assert.deepEqual(fs.readFileSync(file), bytes);
 });
 
 test('v2 aggregates malformed types, duplicate IDs, unknown references and fields including null rows', t => {

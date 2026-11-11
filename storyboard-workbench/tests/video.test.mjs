@@ -111,7 +111,7 @@ test('fresh video CLI seal/validate stay compact and export completes without ci
   const cli = fileURLToPath(new URL('../scripts/video.mjs', import.meta.url));
   const run = (...args) => {
     const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', timeout: 20000 });
-    assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+    assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
     assert.equal(result.signal, null);
     assert.ok(result.stdout.length < 3000, 'CLI只输出文件与数量，不打印Prompt正文');
     return JSON.parse(result.stdout);
@@ -125,6 +125,7 @@ test('fresh video CLI seal/validate stay compact and export completes without ci
   assert.equal(result.files.filter(file => file.endsWith('.xlsx')).length, 1);
   assert.equal(result.files.filter(file => file.endsWith('.md')).length, 1);
   workflow.revision++; save(input, workflow);
+  track(path.join(path.dirname(sealed.file), 'revision-000002.json'));
   const finalized = run('finalize', directory, input); track(finalized.file); finalized.files.forEach(track);
   assert.equal(finalized.stateSaved, true); assert.equal(finalized.exportsUpdated, true);
   assert.equal(finalized.files.find(file => file.endsWith('.xlsx')), result.files.find(file => file.endsWith('.xlsx')));
@@ -147,6 +148,7 @@ test('video export validates its source once per call and does not reuse checks 
 test('finalize seals and delivers once, and reports saved state when Excel export fails', async t => {
   const { directory, workflow, track } = fixture(t);
   const first = await finalizeVideoWorkflow(directory, workflow); track(first.file); first.files.forEach(track);
+  assert.equal(first.acceptance.status, 'passed', JSON.stringify(first.acceptance));
   assert.equal(first.stateSaved, true); assert.equal(first.exportsUpdated, true); assert.equal(first.status, 'delivered');
   const workbook = first.files.find(file => file.endsWith('.xlsx')), bytes = fs.readFileSync(workbook);
   const next = structuredClone(workflow); next.revision++;

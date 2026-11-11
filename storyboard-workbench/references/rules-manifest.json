@@ -24,6 +24,7 @@
     "scripts/process_lock.mjs",
     "scripts/local_image.mjs",
     "scripts/libtv_assets.mjs",
+    "scripts/libtv_upload.mjs",
     "scripts/libtv_generation.mjs",
     "scripts/libtv_generation_store.mjs",
     "scripts/visual_v2.mjs",

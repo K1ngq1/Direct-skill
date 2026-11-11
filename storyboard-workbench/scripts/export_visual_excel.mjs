@@ -315,6 +315,7 @@ function placeImage(workbook, sheet, rowNumber, column, image, caption = '') {
   });
   row.getCell(column).value = { text: caption ? `${caption} · 查看原图` : '查看原图', hyperlink: pathToFileURL(image.filename).href };
   row.getCell(column).font = { name: 'Microsoft YaHei', size: 11, color: { argb: 'FF375F81' }, underline: true };
+  row.getCell(column).alignment = { ...row.getCell(column).alignment, vertical: 'top', wrapText: true };
 }
 
 function calibrationExcel(workbook, plan, project) {
@@ -336,6 +337,28 @@ function calibrationExcel(workbook, plan, project) {
     sheet.getRow(n).getCell(column('用户总分（0–100）')).dataValidation = { type: 'decimal', operator: 'between', allowBlank: true, formulae: [0, 100], showErrorMessage: true, errorStyle: 'stop', errorTitle: '分数范围', error: '请填写0至100的数字。' };
   }
   for (const label of ['Prompt哈希', '来源哈希', '项目ID']) sheet.getColumn(column(label)).hidden = true;
+}
+
+export function deliveryPrompts(plan, { workflow, characterBundle, sceneBundle } = {}) {
+  const entries = [];
+  const add = (type, name, text, shotId, entityId = name) => {
+    if (typeof text === 'string' && text.length) entries.push({ type, name, text, shotId, entityId });
+  };
+  add('全片视频参数', '全片', workflow?.generationSettings);
+  add('音乐', '全片', workflow?.musicPrompt);
+  for (const shot of plan.shots) {
+    add('静帧', shot.id, workflow?.shotPrompts?.find(item => item.shotId === shot.id)?.text ?? shot.prompt.text, shot.id);
+    add('视频', shot.id, shot.videoPrompt, shot.id);
+  }
+  for (const video of workflow?.videoShots ?? []) {
+    const name = video.shotIds.join(' / ');
+    if (!video.shotIds.every(id => plan.shots.find(shot => shot.id === id)?.videoPrompt === video.videoPrompt)) add('视频', name, video.videoPrompt, video.shotIds[0]);
+    add('视频参数', name, video.generationParameters);
+  }
+  for (const [kind, type, bundle] of [['characters', '人物', characterBundle], ['locations', '场景', sceneBundle]]) {
+    for (const row of bundle?.[kind] ?? []) add(type, plan.productionInventory[kind].find(asset => asset.id === row.assetId)?.name ?? '', row.base.text, undefined, row.assetId);
+  }
+  return entries;
 }
 
 export async function exportVisualExcel(plan, project, totalSeconds, manifest = null, report = null, context = {}) {
@@ -369,27 +392,14 @@ export async function exportVisualExcel(plan, project, totalSeconds, manifest = 
   const summary = deliverySheet(workbook, '分镜脚本', ['镜号', '起止时间', '时长（秒）', '场景与人物', '分镜图', '画面与动作', '对白与声音', '摄影与运镜', '衔接备注', '用户意见'], rows,
     { 1: 9, 2: 18, 3: 10, 4: 20, 5: 35, 6: 38, 7: 28, 8: 28, 9: 30, 10: 24 });
   const promptRows = [], targets = new Map(), deliveryGroups = [];
-  const appendPrompt = (type, name, text, shotId, entityId = name) => {
-    if (typeof text !== 'string' || !text.length) return;
+  for (const { type, name, text, shotId, entityId } of deliveryPrompts(plan, context)) {
     if (shotId && !targets.has(shotId)) targets.set(shotId, promptRows.length + 2);
     const start = promptRows.length + 2;
     promptParts(text).forEach((part, index) => promptRows.push([index ? type + '（续' + (index + 1) + '）' : type, name, part]));
     deliveryGroups.push({ id: `prompt/${type}/${entityId}`, kind: 'prompt', sheet: '生成Prompt',
       rows: Array.from({ length: promptRows.length + 2 - start }, (_, index) => start + index),
       values: [type, name, text.replace(/\r\n?/g, '\n')], textColumn: 3 });
-  };
-  appendPrompt('全片视频参数', '全片', workflow?.generationSettings);
-  appendPrompt('音乐', '全片', workflow?.musicPrompt);
-  for (const shot of plan.shots) {
-    appendPrompt('静帧', shot.id, workflow?.shotPrompts?.find(item => item.shotId === shot.id)?.text ?? shot.prompt.text, shot.id);
-    if (shot.videoPrompt !== undefined) appendPrompt('视频', shot.id, shot.videoPrompt, shot.id);
   }
-  for (const video of videos) {
-    if (video.videoPrompt && !video.shotIds.every(id => plan.shots.find(shot => shot.id === id)?.videoPrompt === video.videoPrompt)) appendPrompt('视频', video.shotIds.join(' / '), video.videoPrompt, video.shotIds[0]);
-    appendPrompt('视频参数', video.shotIds.join(' / '), video.generationParameters);
-  }
-  for (const character of context.characterBundle?.characters ?? []) appendPrompt('人物', characters.find(item => item.id === character.assetId)?.name ?? '', character.base.text, undefined, character.assetId);
-  for (const location of context.sceneBundle?.locations ?? []) appendPrompt('场景', locations.find(item => item.id === location.assetId)?.name ?? '', location.base.text, undefined, location.assetId);
   const prompts = deliverySheet(workbook, '生成Prompt', ['类型', '对应镜号或名称', '完整Prompt'], promptRows, { 1: 18, 2: 24, 3: 112 });
   const assets = [...characters.map(asset => ({ ...asset, type: '人物' })), ...locations.map(asset => ({ ...asset, type: '场景' }))];
   const assetShots = asset => plan.shots.filter(shot => asset.type === '人物' ? shot.shotSchema.subjects.some(subject => subject.assetId === asset.id) : shot.locationId === asset.id);

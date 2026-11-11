@@ -53,6 +53,8 @@
 !/storyboard-workbench/tests/generation-pipeline.test.mjs
 !/storyboard-workbench/tests/generation-bridge.test.mjs
 !/storyboard-workbench/tests/libtv-assets.test.mjs
+!/storyboard-workbench/tests/libtv-upload.test.mjs
+!/storyboard-workbench/tests/libtv-receipts.test.mjs
 !/storyboard-workbench/tests/libtv-generation.test.mjs
 !/storyboard-workbench/tests/libtv-generation-store.test.mjs
 !/storyboard-workbench/tests/libtv-delivery.test.mjs

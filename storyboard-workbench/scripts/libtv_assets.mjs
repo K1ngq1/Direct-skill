@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { runConcurrentJobs } from './media_batch.mjs';
+import { createProcessLock } from './process_lock.mjs';
 
 export function libtvData(response) {
   if (response?.isError) throw Object.assign(new Error(response.content?.filter(part => part.type === 'text').map(part => part.text).join('\n') || 'LibTV MCP 返回错误'), { status: 'failed' });
@@ -65,8 +66,10 @@ export function prepareLibTVAssets(directory, items, { projectId, scope = 'perso
 export function createLibTVReceiptStore(directory) {
   fs.mkdirSync(directory, { recursive: true });
   const filename = (item, stage) => {
-    if (!/^[A-Za-z0-9_-]{1,80}$/.test(item.id) || !/^[a-z_]+$/.test(stage)) throw new Error('LibTV 回执路径无效');
-    return path.join(directory, `${item.id}.${stage}.json`);
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(item.id) || (stage !== undefined && !/^[a-z_]+(?:\.error)?$/.test(stage))) throw new Error('LibTV 回执路径无效');
+    const file = path.join(directory, `${item.id}${stage === undefined ? '' : '.' + stage}.json`);
+    if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw new Error('LibTV 回执不能是链接');
+    return file;
   };
   return {
     readReceipt: async (item, stage) => {
@@ -75,10 +78,178 @@ export function createLibTVReceiptStore(directory) {
     },
     writeReceipt: async (item, stage, receipt, { exclusive = false } = {}) => {
       const file = filename(item, stage), text = `${JSON.stringify(receipt, null, 2)}\n`;
-      if (exclusive) return fs.writeFileSync(file, text, { encoding: 'utf8', flag: 'wx' });
+      const durableWrite = target => {
+        const fd = fs.openSync(target, 'wx');
+        try { fs.writeFileSync(fd, text, 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      };
+      if (exclusive) return durableWrite(file);
       const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-      try { fs.writeFileSync(temporary, text, { encoding: 'utf8', flag: 'wx' }); fs.renameSync(temporary, file); }
+      try { durableWrite(temporary); fs.renameSync(temporary, file); }
       finally { if (fs.existsSync(temporary)) fs.unlinkSync(temporary); }
+    }
+  };
+}
+
+// File-only boundary: no MCP or media calls, and no conversion of legacy receipt bodies.
+export async function receiptBridge(input) {
+  if (!input || !path.isAbsolute(input.directory ?? '')) throw new Error('LibTV 回执目录须为绝对路径');
+  const store = createLibTVReceiptStore(input.directory);
+  const parseKey = key => {
+    const match = typeof key === 'string' && /^([A-Za-z0-9_-]{1,80})(?:\.([a-z_]+(?:\.error)?))?$/.exec(key);
+    if (!match) throw new Error('LibTV 回执 key 无效');
+    return [{ id: match[1] }, match[2]];
+  };
+  if (input.operation === 'snapshot') {
+    const receipts = {};
+    for (const filename of fs.readdirSync(input.directory)) {
+      if (!/^[A-Za-z0-9_-]{1,80}(?:\.[a-z_]+(?:\.error)?)?\.json$/.test(filename)) continue;
+      const key = filename.slice(0, -5), value = await store.readReceipt(...parseKey(key));
+      if (value && !Array.isArray(value) && ['tool', 'status', 'state', 'error'].some(field => Object.hasOwn(value, field))) receipts[key] = value;
+    }
+    return { receipts };
+  }
+  if (input.operation === 'verify') {
+    if (!Array.isArray(input.items) || new Set(input.items.map(item => item.id)).size !== input.items.length) throw new Error('LibTV 文件清单无效');
+    for (const item of input.items) {
+      if (!path.isAbsolute(item.path ?? '') || !Number.isSafeInteger(item.size) || item.size <= 0 || !/^[a-f0-9]{64}$/.test(item.sha256 ?? '')) throw new Error('LibTV 文件身份无效');
+      const bytes = fs.readFileSync(item.path);
+      if (bytes.length !== item.size || crypto.createHash('sha256').update(bytes).digest('hex') !== item.sha256) throw new Error(`${item.id} 文件长度或哈希已变化`);
+    }
+    return { verified: input.items.length };
+  }
+  if (!['read', 'write'].includes(input.operation)) throw new Error('未知 LibTV 回执操作');
+  const key = parseKey(input.key);
+  if (input.operation === 'read') return store.readReceipt(...key);
+  const started = performance.now();
+  const previous = await store.readReceipt(...key);
+  if (Object.hasOwn(input, 'expected') && JSON.stringify(previous) !== JSON.stringify(input.expected)) throw new Error(`${input.key} 回执已变化；拒绝覆盖`);
+  if (!input.value || typeof input.value !== 'object' || Array.isArray(input.value)) throw new Error('LibTV 回执须为对象');
+  if (previous?.tool && (input.value.tool !== previous.tool || JSON.stringify(input.value.args) !== JSON.stringify(previous.args))) throw new Error(`${input.key} 原请求身份不匹配`);
+  if (input.key.endsWith('.error') && previous) throw new Error('历史错误回执不可覆盖');
+  const receipt = { ...input.value, receiptSavedAt: new Date().toISOString() };
+  await store.writeReceipt(...key, receipt, { exclusive: input.exclusive === true });
+  return { receipt, receiptSavedAt: new Date().toISOString(), receiptSaveMs: performance.now() - started };
+}
+
+// A host injects its existing MCP boundary and normal-Node bridge; this never starts work itself.
+export async function createLibTVCanvasSession({ projectId, bridge, call, paused = true, independentJobs = false }) {
+  if (!projectId || typeof bridge !== 'function' || typeof call !== 'function') throw new Error('LibTV 画布会话缺少项目或宿主边界');
+  if (typeof independentJobs !== 'boolean') throw new Error('独立任务隔离开关须为布尔值');
+  const monotonic = typeof performance !== 'undefined' && typeof performance.now === 'function';
+  const now = () => monotonic ? performance.now() : Date.now();
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const started = now(), initial = await bridge({ operation: 'snapshot' });
+  const receipts = clone(initial.receipts), pendingSaves = new Map(), active = new Set();
+  let stopped = paused, storageFailed = false, pausedAt = paused ? now() : null, pausedMs = 0, outstanding = 0;
+  const timing = { preparationMs: now() - started, toolWaitMs: 0, receiptSaveMs: 0, toolCalls: 0, peakOutstandingCalls: 0, durationSource: monotonic ? 'monotonic' : 'utc-estimate' };
+  const issue = (message, status = 'unknown') => Object.assign(new Error(message), { status });
+  const save = async (key, receipt, expected) => {
+    try {
+      const result = await bridge({ operation: 'write', key, value: receipt, expected, exclusive: expected === null });
+      if (!result?.receipt) throw new Error('存储未返回持久化回执');
+      receipts[key] = result.receipt;
+      timing.receiptSaveMs += result.receiptSaveMs ?? 0;
+      return result.receipt;
+    } catch (error) { storageFailed = true; throw error; }
+  };
+  const validate = (name, key, args) => {
+    if (!['upload_ticket', 'upload_complete', 'upload_media', 'create_node', 'manage_group'].includes(name)) throw issue('禁止的画布交付工具：' + name, 'failed');
+    const assetId = key.split('.')[0];
+    if (name === 'upload_complete') {
+      const ticket = receipts[assetId + '.ticket'];
+      if (!(ticket?.tool === 'upload_ticket' && ticket.status === 'completed' && ticket.args.projectId === projectId && ticket.value.path === args?.path && ticket.value.uploadId === args?.upload_id)) throw issue('上传完成请求未匹配同项原票据', 'failed');
+    } else if (args?.projectId !== projectId) throw issue('LibTV 项目身份不匹配', 'failed');
+    if (name === 'upload_media') {
+      const completed = receipts[assetId + '.complete'], ticket = receipts[assetId + '.ticket'];
+      if (!(completed?.tool === 'upload_complete' && completed.status === 'completed' && ticket?.args.projectId === projectId && ticket.status === 'completed' && completed.args.path === ticket.value.path && completed.args.upload_id === ticket.value.uploadId && completed.value.file_ref === args.fileRef)) throw issue('图片引用未匹配同项上传凭据', 'failed');
+    }
+    if (name === 'create_node' && (args.run !== false || !['image', 'video', 'audio', 'text'].includes(args.nodeType))) throw issue('画布节点须显式 run:false，且类型有效', 'failed');
+    if (name === 'manage_group' && args.action !== 'create') throw issue('画布交付只允许创建分组', 'failed');
+  };
+  const deliver = receipt => {
+    if (receipt.status !== 'completed') throw issue(`${receipt.tool} 返回 ${receipt.status}`, receipt.status);
+    return clone(receipt.value);
+  };
+  const responseStatus = (name, args, value) => {
+    if (value?.status && value.status !== 'completed') return value.status;
+    if (name === 'upload_ticket') return value?.uploadId && value.path && Array.isArray(value.parts) && value.parts.length ? 'completed' : 'unknown';
+    if (name === 'upload_complete') return value?.file_ref && value.path === args.path ? 'completed' : 'unknown';
+    if (name === 'upload_media') {
+      const review = value?.resource?.review?.state;
+      if (review === 'rejected') return 'review_rejected';
+      if (review === 'pending') return 'review_pending';
+      if (review !== 'passed' || value?.projectId !== projectId || !value.nodeId || !(value.resourceId || value.resource?.resource_id)) return 'unknown';
+    }
+    if (name === 'create_node' && (value?.projectId !== projectId || !(value.plan?.nodeId || value.operationResult?.subjectNodeId))) return 'unknown';
+    return value?.status ?? 'unknown';
+  };
+  const savedCall = async (name, key, args, { recover = false } = {}) => {
+    if (!/^[A-Za-z0-9_-]{1,80}(?:\.[a-z_]+)?$/.test(key)) throw issue('LibTV 回执 key 无效', 'failed');
+    validate(name, key, args);
+    args = clone(args);
+    const previous = receipts[key] ?? null;
+    if (previous && (previous.tool !== name || JSON.stringify(previous.args) !== JSON.stringify(args))) throw issue(key + ' 原请求身份不匹配', 'failed');
+    if (previous?.status === 'completed') return deliver(previous);
+    if (stopped) throw issue('批次已暂停', 'paused');
+    if (storageFailed || [...pendingSaves.keys()].some(id => !active.has(id))) throw issue('先恢复原返回结果的保存，禁止新增提交');
+    if (active.has(key)) throw issue(key + ' 已有在途调用');
+    if (previous && ['failed', 'review_rejected', 'rejected', 'cancelled'].includes(previous.status)) throw issue(key + ' 保留失败终态，不自动重试', previous.status);
+    if (previous && previous.status !== 'prepared' && !(recover && name === 'upload_media' && args.idempotencyKey)) throw issue(key + ' 结果未知，只允许按原上传身份显式恢复');
+    if (!previous && Object.entries(receipts).some(([id, receipt]) => !id.endsWith('.error') && !active.has(id) && (!independentJobs || id.split('.')[0] === key.split('.')[0]) && ['submitted', 'unknown', 'pending', 'review_pending'].includes(receipt.status))) throw issue('已有未知或审核等待项，禁止增加新提交');
+    active.add(key);
+    try {
+      const submitted = await save(key, { ...previous, tool: name, args, status: 'submitted', startedAt: previous?.startedAt ?? new Date().toISOString(), ...(previous ? { previous } : {}) }, previous);
+      if (stopped) {
+        await save(key, { ...submitted, status: 'prepared', notCalledAt: new Date().toISOString() }, submitted);
+        throw issue('批次已暂停，已登记的请求未调用远端', 'paused');
+      }
+      const toolStartedAt = new Date().toISOString(), toolStarted = now();
+      let value, error;
+      timing.toolCalls++;
+      timing.peakOutstandingCalls = Math.max(timing.peakOutstandingCalls, ++outstanding);
+      try {
+        const raw = await call(name, args);
+        // Preserve isError evidence without guessing whether a transport failure was accepted.
+        if (raw?.isError) throw Object.assign(new Error('LibTV MCP 返回错误'), { evidence: raw });
+        value = libtvData(raw);
+        if (value?.ok === false) throw Object.assign(new Error('LibTV 返回 ok:false'), { evidence: raw });
+      } catch (caught) { error = caught; }
+      outstanding--;
+      const toolReturnedAt = new Date().toISOString();
+      timing.toolWaitMs += Math.max(0, now() - toolStarted);
+      const status = error ? 'unknown' : responseStatus(name, args, value);
+      const receipt = { ...submitted, status, toolStartedAt, toolReturnedAt, finishedAt: toolReturnedAt,
+        ...(error ? { error: String(error.message ?? error), ...(error.evidence ? { evidence: error.evidence } : {}) } : { value }) };
+      pendingSaves.set(key, { receipt, expected: submitted });
+      await save(key, receipt, submitted);
+      pendingSaves.delete(key);
+      return deliver(receipt);
+    } finally { active.delete(key); }
+  };
+  return {
+    savedCall,
+    setPaused(value) {
+      if (typeof value !== 'boolean') throw new Error('paused 须为布尔值');
+      if (value !== stopped) { if (value) pausedAt = now(); else { pausedMs += Math.max(0, now() - pausedAt); pausedAt = null; } }
+      stopped = value;
+    },
+    async recoverSave(key) {
+      const pending = pendingSaves.get(key);
+      if (!pending) throw new Error('没有可恢复的原返回结果');
+      const stored = await bridge({ operation: 'read', key });
+      const withoutSaveTime = receipt => { const value = { ...receipt }; delete value.receiptSavedAt; return JSON.stringify(value); };
+      if (stored && withoutSaveTime(stored) === withoutSaveTime(pending.receipt)) receipts[key] = stored;
+      else if (JSON.stringify(stored) === JSON.stringify(pending.expected)) await save(key, pending.receipt, pending.expected);
+      else throw new Error('原返回结果保存发生冲突；保留回执，不重投');
+      pendingSaves.delete(key);
+      storageFailed = pendingSaves.size > 0;
+      return deliver(pending.receipt);
+    },
+    snapshot() {
+      const end = now(), excludedPauseMs = pausedMs + (pausedAt === null ? 0 : Math.max(0, end - pausedAt));
+      const summary = { receipts: clone(receipts), pendingSaves: clone(Object.fromEntries(pendingSaves)), paused: stopped, active: [...active], timing: { ...timing, wallMs: Math.max(0, end - started - excludedPauseMs), elapsedWallMs: Math.max(0, end - started), excludedPauseMs, serverExecutionPeak: null } };
+      summary.timing.summaryMs = Math.max(0, now() - end);
+      return summary;
     }
   };
 }
@@ -190,9 +361,70 @@ export async function runLibTVAssets(items, { discover, call, transfer, readRece
   return items.map(item => ({ ...byHash.get(item.sha256), id: item.id, ...(originals.get(item.sha256).id === item.id ? {} : { reusedFrom: originals.get(item.sha256).id }) }));
 }
 
-export const libtvAssetsHostSource = () => [runConcurrentJobs, libtvData, discoverLibTVAssets, runLibTVAssets].map(fn => fn.toString()).join('\n\n');
+export const libtvAssetsHostSource = () => [runConcurrentJobs, libtvData, discoverLibTVAssets, runLibTVAssets, createLibTVCanvasSession].map(fn => fn.toString()).join('\n\n');
 
 if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === 'host-source') process.stdout.write(`${libtvAssetsHostSource()}\n`);
-  else { process.stderr.write('用法：libtv_assets.mjs host-source；文件准备和回执存储通过模块导出使用，不自动调用远程服务。\n'); process.exitCode = 1; }
+  else if (process.argv[2] === 'receipts') {
+    const framed = process.argv[3] === '--stdio' && process.stdin.isTTY;
+    let output = '', outputOffset = 0;
+    const drain = () => {
+      const end = Math.min(output.length, outputOffset + 48 * 1024);
+      let chunk = '';
+      for (; outputOffset < end; outputOffset += 48) chunk += '~B64 ' + output.slice(outputOffset, outputOffset + 48) + '\n';
+      chunk += outputOffset >= output.length ? '~END\n' : '~MORE\n';
+      process.stdout.write(chunk);
+      if (outputOffset >= output.length) { output = ''; outputOffset = 0; }
+    };
+    const respond = value => {
+      if (!framed) return process.stdout.write(JSON.stringify(value) + '\n');
+      // ConHost can trim trailing spaces even on short lines; base64 preserves exact JSON bytes.
+      output = Buffer.from(JSON.stringify(value), 'utf8').toString('base64');
+      outputOffset = 0;
+      drain();
+    };
+    let lock, owner;
+    const release = () => { if (owner) { lock.release({ owner: owner.owner }); owner = null; } };
+    try {
+      if (process.argv[3] === '--stdio') {
+        const directory = process.argv[4];
+        if (!path.isAbsolute(directory ?? '')) throw new Error('LibTV 回执目录须为绝对路径');
+        fs.mkdirSync(directory, { recursive: true });
+        lock = createProcessLock(path.join(directory, '.libtv-receipts.lock'));
+        owner = lock.acquire();
+        process.once('SIGINT', () => { release(); process.exit(130); });
+        process.once('SIGTERM', () => { release(); process.exit(143); });
+        if (process.stdin.isTTY) process.stdin.setRawMode(true);
+        respond({ ok: true, value: { ready: true, owner: owner.owner } });
+        const { createInterface } = await import('node:readline');
+        const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+        for await (const line of lines) {
+          if (!line.trim()) continue;
+          let input;
+          try {
+            input = JSON.parse(line);
+            if (input.operation === 'drain') { if (output) drain(); else respond({ ok: false, error: '没有待取回的本地响应' }); continue; }
+            if (output) { process.stdout.write('~WAIT\n'); continue; }
+            if (input.operation === 'close') { respond({ requestId: input.requestId, ok: true, value: { closed: true } }); lines.close(); break; }
+            if (input.directory && path.resolve(input.directory) !== path.resolve(directory)) throw new Error('不能切换持锁目录');
+            lock.assertOwner({ owner: owner.owner });
+            const value = await receiptBridge({ ...input, directory });
+            const result = framed && input.operation === 'write' ? { saved: true, receiptSavedAt: value.receipt.receiptSavedAt, receiptSaveMs: value.receiptSaveMs } : value;
+            respond({ requestId: input.requestId, ok: true, value: result });
+          } catch (error) { respond({ requestId: input?.requestId, ok: false, error: error.message, code: error.code }); }
+        }
+      } else {
+        const input = JSON.parse(fs.readFileSync(process.argv[3] ?? 0, 'utf8'));
+        if (input.operation === 'write') {
+          if (!path.isAbsolute(input.directory ?? '')) throw new Error('LibTV 回执目录须为绝对路径');
+          fs.mkdirSync(input.directory, { recursive: true });
+          lock = createProcessLock(path.join(input.directory, '.libtv-receipts.lock'));
+          owner = lock.acquire();
+        }
+        respond({ ok: true, value: await receiptBridge(input) });
+      }
+    } catch (error) { respond({ ok: false, error: error.message, code: error.code }); process.exitCode = 1; }
+    finally { release(); }
+  }
+  else { process.stderr.write('用法：libtv_assets.mjs host-source | receipts [request.json] | receipts --stdio <directory>；只操作本地回执。\n'); process.exitCode = 1; }
 }

@@ -171,7 +171,7 @@ export async function finalizeVideoWorkflow(directory, input) {
   const result = { status: 'sealed', stateSaved: true, exportsUpdated: false, file: sealed.file, ...summary(sealed.workflow) };
   try {
     const { exportVisualProject } = await import('./visual.mjs');
-    result.files = await exportVisualProject(directory, { videoWorkflow: sealed.workflow });
+    Object.assign(result, await exportVisualProject(directory, { videoWorkflow: sealed.workflow, deliveryCheck: 'after-export' }));
     result.status = 'delivered'; result.exportsUpdated = true;
   } catch (error) {
     result.exportFailure = { message: error.message, ...(error.conflicts ? { conflicts: error.conflicts } : {}) };
@@ -267,7 +267,7 @@ async function main() {
     if (!directory || !revision) fail('用法：video.mjs seal/finalize <project> <input.json> | validate/export <project> <revision.json> | bind-excel <project> <revision.json> <existing.xlsx> | feedback <project> <revision.json> <feedback.json|xlsx>');
     let result;
     if (command === 'seal') { const sealed = sealVideoWorkflow(directory, read(revision)); result = { status: 'sealed', file: sealed.file, ...summary(sealed.workflow) }; }
-    else if (command === 'finalize') { result = await finalizeVideoWorkflow(directory, read(revision)); if (!result.exportsUpdated) process.exitCode = 1; }
+    else if (command === 'finalize') { result = await finalizeVideoWorkflow(directory, read(revision)); if (!result.exportsUpdated || result.acceptance?.status !== 'passed') process.exitCode = 1; }
     else {
       const workflow = read(insideFile(directory, revision));
       if (command === 'validate') { validateVideoWorkflow(directory, workflow); result = { status: 'valid', ...summary(workflow) }; }
