@@ -229,9 +229,51 @@ node --test storyboard-workbench/tests/libtv-generation.test.mjs storyboard-work
 
 ## LibTV 独立资产并发
 
+### 原生 curl 上传（默认入口）
+
+新上传统一使用 [libtv_upload.mjs](../scripts/libtv_upload.mjs)，Windows 调用 `curl.exe`，其他平台调用 `curl`。不再复制项目里的临时 Python 传输器，也不为每批重写 PUT 脚本。Node 与 curl 已有即可使用，无需部署服务或安装 Python requests。旧批次保留原传输器和回执，不能换入口把未知 PUT 当作新上传。
+
+开始批次时先运行一次 `node storyboard-workbench/scripts/libtv_upload.mjs doctor`，只检查本机程序与 HTTPS 能力，零网络请求；检查失败不申请票据。整批在同一执行单元运行已有队列，默认四项并发，每项取得票据后立即传输并推进完成上传，不等其他图片；实际限流时调整后续并发。不得每张上传后返回模型再决定下一张，也不预先申请远超当前槽位数量的票据。curl 不改变现有代理环境，不关闭 TLS 校验、不跟随重定向、不自动重试、不替换签名域名。
+
+正常 Node 宿主直接接入下方资产队列的 `transfer` 回调；同一进程只检测一次 curl：
+
+```js
+import { checkLibTVCurl, transferLibTVFile } from './libtv_upload.mjs';
+await checkLibTVCurl(); // 在申请第一张上传票据前执行。
+const transfer = (item, ticket) => transferLibTVFile(receiptDirectory, item, ticket, {
+  allowUpload: true // 仅在本次上传已获授权时传入；默认 false，只复用完成证明。
+});
+```
+
+只有 MCP 能力的宿主通过普通 Node 进程桥接此回调，使用 `execFile` 参数数组及 UTF-8 stdin，不把 JSON、图片字节或签名地址放进 shell 命令。CLI 为 `node storyboard-workbench/scripts/libtv_upload.mjs upload "<request.json>"`，或 `upload -` 从 stdin 读取。输入为 `{directory,item,ticket,allowUpload:true}`：directory 和 item.path 是绝对路径；item 包含 `{id,projectId,path,size,sha256,sha1?}`；ticket 是同项 `upload_ticket` 的真实原始结果，保留 `uploadId/path/parts` 和原分片长度，不猜测多片大小。宿主调用示例：
+
+```js
+const transfer = (item, ticket) => new Promise((resolve, reject) => {
+  const child = execFile(process.execPath, [uploadScript, 'upload', '-'], {
+    windowsHide: true, encoding: 'utf8'
+  }, (error, stdout) => {
+    try {
+      const result = JSON.parse(stdout);
+      if (error || !result.ok) throw Object.assign(new Error(result.error || '本地上传进程失败'), { returned: result.returned });
+      resolve(result.value);
+    } catch (failure) { reject(failure); }
+  });
+  child.stdin.on('error', () => {}); // 退出与完整 JSON 回包由上面的回调判定。
+  child.stdin.end(JSON.stringify({ directory: receiptDirectory, item, ticket, allowUpload: true }));
+});
+```
+
+执行器读取并核对一次实际字节，直接送进 curl stdin，不生成临时图片、不将图片送回模型；临时配置只含当次签名地址，正常结束逐个删除。单文件按官方分片顺序上传，文件之间由现有队列并发。默认连接期限15秒、每片总期限90秒；可用 `timeoutSeconds` 调整每片总期限，不能用延长等待掩盖连接故障。成功必须同时满足 curl 正常退出、HTTP 2xx、实际上传字节数匹配；只返回小证明 `{status,bytes,sha256,transport,transferMs,wallMs,reused}`。
+
+本地 `.libtv-upload-receipts` 使用共用原子回执存储和每项进程锁，不以全批上传锁串行化文件。`curl_submitted` 在首次 PUT 前独占保存，`curl_completed` 保存原票据绑定的完成证明；同项重入核对原件、项目与票据后复用，零网络调用。连接失败、HTTP 错误或中断留下原 submitted/unknown，不自动重投。若已成功但保存失败，CLI 错误回包保留 `returned`；先保存原返回证据，只恢复本地回执，不能重新 PUT。只有完成证明才能继续 `upload_complete`，字节传输成功不等于 LibTV 入库成功。旧外层回执为 unknown 时仍按原流程核对恢复，不把更换传输器当作解锁依据。
+
+离线验证：`node --test storyboard-workbench/tests/libtv-upload.test.mjs storyboard-workbench/tests/libtv-assets.test.mjs`；模拟网络不证明真实带宽或端到端提速。用户计时仍记录提交需求到最终验收的总时长，curl 分项耗时只用于排障。
+
+### 资产库接入
+
 使用 [libtv_assets.mjs](../scripts/libtv_assets.mjs) 复用同一并发队列。开始时发现精确项目和目录、读取已有内容索引并处理分页；目录先建立一次，同目录的创建或更新不并发争写。
 
-本地准备使用 `prepareLibTVAssets(projectDirectory, items, {projectId,scope})` 计算真实文件哈希与稳定键，`items` 包含 `{id,name,path,folderId}`。`createLibTVReceiptStore(receiptDirectory)` 提供逐阶段文件回执。两者可由 `node_repl` 从模块导入，文件和目录必须是本次获授权目标。不要从普通节点名或任意数字推断目录 ID。
+本地准备使用 `prepareLibTVAssets(projectDirectory, items, {projectId,scope})` 计算真实文件哈希与稳定键，`items` 包含 `{id,name,path,folderId}`。`createLibTVReceiptStore(receiptDirectory)` 提供逐阶段文件回执，由普通 Node 进程执行；不要经 `node_repl` 逐项读取或保存。文件和目录必须是本次获授权目标。已提交的历史批次沿用原键，不重新运行 prepare 推导替代键。不要从普通节点名或任意数字推断目录 ID。
 
 `node storyboard-workbench/scripts/libtv_assets.mjs host-source` 输出完整的同一发现及流水线函数，可按上面的方式载入 `functions.exec`。宿主只注入工具和文件边界：
 
@@ -258,6 +300,44 @@ const results = await runLibTVAssets(preparedItems, {
 - MCP `isError`、审核待处理、审核拒绝及未知写入分别记录。未知写只按原 task/operation/幂等键恢复，不换键创建。入库成功后按接口要求读取一次资产详情，核对持久身份和版本；缓存可用于后续本轮步骤，不能冒充跨任务最新状态。
 
 工具方法与返回字段以本次实际 MCP schema 为准。宿主注入工具调用与文件传输；本地模块不绕过 MCP 另接私有 API。独立资产失败不阻断已就绪的其他资产，但来源、空间、版本及实际原件校验保留。
+
+### 仅上传画布及建立待生成节点
+
+此路径复用 `libtv_assets.mjs` 的存储与 `media_batch.mjs` 队列，使用 `createLibTVCanvasSession({projectId,bridge,call,paused:true})`。工厂不调用远端，默认暂停；用户明确恢复后才 `setPaused(false)`。不能套用要求资产库目录的 `runLibTVAssets()`，也不能把 `run:false` 节点交给图片生成 store。完整源代码仍由 `libtv_assets.mjs host-source` 提供，宿主只注入文件桥接和正式 MCP 调用。
+
+新批次的文件传输同样使用上面的原生 curl 入口：`savedCall('upload_ticket', ...) → transfer(item,ticket) → savedCall('upload_complete', ...) → savedCall('upload_media', ...)`。前一步失败时不执行后一步；传输回包必须 `ok:true` 且完成证明已保存。四路就绪任务在一个协调器内自动推进，模型只接收最终汇总与必要异常。
+
+文件桥接输入只走 UTF-8 请求文件或标准输入，正文不插入 shell 命令：
+
+```text
+node storyboard-workbench/scripts/libtv_assets.mjs receipts "<request.json>"
+node storyboard-workbench/scripts/libtv_assets.mjs receipts --stdio "<receipt-directory>"
+```
+
+单次请求返回 `{ok,value}`；失败返回 `{ok:false,error,code}` 并以非零退出。stdio 每行一个请求，回包带原 `requestId`，`close` 释放本进程锁退出。该进程只服务本批本地存储，不建立网络服务。Windows 宿主若普通管道立即 EOF，应使用 `tty:true`；TTY 回包将 UTF-8 JSON 编码为 base64，以 `~B64` 加48个字符分段、`~END` 结束，避免 ConHost 换行及行尾空格丢失改变正文或回执身份。`~MORE` 后只发送 `{"operation":"drain"}` 取原响应剩余部分，不重发业务请求。去除终端控制符后拼接 base64 分段，完整解码 UTF-8 后再解析 JSON；旧 `~DATA` 仅保留读取兼容，禁止把截断或部分回包当成功。TTY 写入成功只返回 `saved/receiptSavedAt/receiptSaveMs`，宿主用原 value 加该保存时间恢复回执对象，避免重复传回完整 Prompt。
+
+| operation | 输入与结果 |
+|---|---|
+| snapshot | `{directory}`：一次读取回执，返回 `{receipts:{key:receipt}}`；不把计划正文和图片带回主对话 |
+| read | `{directory,key}`：仅用于按需核对、保存应答丢失恢复；不存在返回 null |
+| write | `{directory,key,value,expected,exclusive?}`：比较原记录后原子保存，冲突停止；返回保存证据 |
+| verify | `{directory,items:[{id,path,size,sha256}]}`：一次核对冻结原件长度和哈希，不调用媒体工具 |
+
+key 沿用原文件名去掉 `.json`，例如 `S01.ticket`、`S01.complete`、`S01.upload`、`S01.upload.error`。原错误文件只读，后续错误及原状态在新回执历史中保留。直接模块调用仍保留旧 `createLibTVReceiptStore()` 签名；CLI 写操作及批次 stdio 共用进程锁，持锁、未知 owner 或目录冲突不强制清除。
+
+`savedCall(name,key,args,{recover:false})` 启动时只取一次快照，后续使用保存成功的缓存；正常每个远端操作只做调用前登记和返回后保存。项目、原请求、原键和同项 ticket→complete→fileRef 必须一致。成功项直接复用；审核拒绝保留终态；未知票据及完成上传不能重投，未知/审核等待的 `upload_media` 仅在明确恢复时以原身份调用。已有未知项阻止新增任务，未发送即暂停的请求单独记录为 prepared。
+
+工具返回后存储失败时停止新派发，保留 `snapshot().pendingSaves` 中原返回结果；`recoverSave(key)` 只读取并补存原结果。如果写入已成功但应答丢失，核对相同正文后确认，不重复远端调用。宿主关闭执行上下文前须保存这份私有恢复证据，不在聊天打印票据或签名链接。传输器另核对本项文件哈希和原票据，未知 PUT 不重复发送；已返回但落盘失败只恢复原证明。
+
+仅允许上传、完成上传、挂图、创建节点和创建分组；节点调用必须显式 `run:false`，生成、升级及导出执行工具均被拒绝。审核通过、文件成功、画面检查、用户确认仍分别记录。批次结束集中回读真实节点/资源/连线，不因工具返回 completed 就省略交付核对。
+
+用户要求整批异步推进时，一次冻结全部上传与节点任务，在同一执行单元调用 `runConcurrentJobs(jobs, worker, {concurrency:4, dependsOn:job=>job.dependsOn})`。每项使用唯一 `id`；节点依赖真实上传任务，后续说明依赖相应节点。调度器只让就绪项占槽，先完成的上传可立即解锁其节点，不等整批图片收齐；单项拒绝只阻塞其依赖，结束时集中汇总一次。依赖不存在、重复身份或循环会在任何调用前拒绝。
+
+画布会话仅在用户明确要求独立项继续时设置 `independentJobs:true`，将未知或审核等待的拦截范围限制到同项回执；默认仍保持全批拦截。调用方必须声明依赖，不能把依赖未知素材的节点伪装成独立项。未知项不重投、不换键；持久化故障仍停止全部新增调用，暂停及 `run:false` 边界不变。
+
+这是客户端的有界异步编排，不是服务端批量接口：每张图片仍按票据、字节上传、完成上传及审核挂图的顺序执行。当前宿主执行单元被中断后不承诺继续后台调度；恢复使用已保存的同一批次，而不是重新提交整批。进度只给紧凑计数，完整结果在批次收尾时回传；文件哈希仅在冻结与实际传输边界核对，不逐次MCP调用重读原图。
+
+计时保留 `startedAt/toolStartedAt/toolReturnedAt/receiptSavedAt`。`toolWaitMs` 与 `receiptSaveMs` 是分项累计；`elapsedWallMs` 是会话墙钟，`wallMs` 扣除显式暂停时段。等待用户时先暂停；没有记录的等待不能擅自扣除。宿主无单调时钟则标 `utc-estimate`，不把在途 MCP 数当作远端生成并发。模拟验收运行 `node --test storyboard-workbench/tests/libtv-receipts.test.mjs`，不消耗媒体额度。
 
 ## 批次结束后一次交付
 

@@ -17,9 +17,46 @@ export async function withDeadline(promise, timeoutMs, label = '工具调用') {
   } finally { clearTimeout(timer); }
 }
 
-export async function runConcurrentJobs(jobs, worker, { concurrency = 4 } = {}) {
+export async function runConcurrentJobs(jobs, worker, { concurrency = 4, dependsOn } = {}) {
   if (!Array.isArray(jobs) || typeof worker !== 'function' || !Number.isInteger(concurrency) || concurrency < 1) throw new Error('任务数组、worker或并发数无效');
   const results = new Array(jobs.length);
+  if (dependsOn !== undefined) {
+    if (typeof dependsOn !== 'function') throw new Error('任务依赖读取器无效');
+    const indices = new Map(jobs.map((job, index) => [job?.id, index]));
+    if (indices.size !== jobs.length || jobs.some(job => typeof job?.id !== 'string' || !job.id)) throw new Error('依赖任务ID无效或重复');
+    const dependencies = jobs.map(job => {
+      const ids = dependsOn(job);
+      if (!Array.isArray(ids) || new Set(ids).size !== ids.length || ids.some(id => !indices.has(id))) throw new Error('任务依赖无效');
+      return ids.map(id => indices.get(id));
+    });
+    const checked = new Set(), visiting = new Set();
+    const visit = index => {
+      if (visiting.has(index)) throw new Error('任务依赖存在循环');
+      if (checked.has(index)) return;
+      visiting.add(index);
+      dependencies[index].forEach(visit);
+      visiting.delete(index); checked.add(index);
+    };
+    jobs.forEach((_, index) => visit(index));
+    const pending = new Set(jobs.map((_, index) => index)), active = new Map();
+    while (pending.size || active.size) {
+      for (const index of pending) {
+        if (dependencies[index].some(dep => results[dep]?.status === 'rejected')) {
+          results[index] = { status: 'rejected', reason: '依赖任务未完成；未调用执行器' };
+          pending.delete(index);
+        } else if (active.size < concurrency && dependencies[index].every(dep => results[dep]?.status === 'fulfilled')) {
+          pending.delete(index);
+          const work = Promise.resolve().then(() => worker(jobs[index], index)).then(
+            value => { results[index] = { status: 'fulfilled', value }; },
+            error => { results[index] = { status: 'rejected', reason: String(error?.message ?? error) }; }
+          ).finally(() => active.delete(index));
+          active.set(index, work);
+        }
+      }
+      if (active.size) await Promise.race(active.values());
+    }
+    return results;
+  }
   let cursor = 0;
   await Promise.all(Array.from({ length: Math.min(concurrency, jobs.length) }, async () => {
     while (cursor < jobs.length) {

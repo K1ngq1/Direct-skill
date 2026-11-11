@@ -10,6 +10,41 @@ const job = id => ({ id, count: 1, prompt: '同一人物站在窗边。', refere
 const output = id => ({ path: `images/${id}.png`, sha256: 'a'.repeat(64) });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
+test('one batch starts ready dependent nodes before a slow upload returns and isolates failed dependencies', async () => {
+  const slow = deferred();
+  let slowFinished = false, nodeStartedEarly = false, active = 0, peak = 0;
+  const executed = [];
+  const jobs = [
+    { id: 'node-slow', deps: ['upload-slow'] }, { id: 'node-fast', deps: ['upload-fast'] },
+    { id: 'upload-slow', deps: [] }, { id: 'upload-fast', deps: [] },
+    { id: 'failure', deps: [] }, { id: 'blocked', deps: ['failure'] }, { id: 'independent', deps: [] }
+  ];
+  const results = await runConcurrentJobs(jobs, async job => {
+    executed.push(job.id); active++; peak = Math.max(peak, active);
+    try {
+      if (job.id === 'upload-slow') { await slow.promise; slowFinished = true; }
+      if (job.id === 'node-fast') { nodeStartedEarly = !slowFinished; slow.resolve(); }
+      if (job.id === 'failure') throw new Error('upload rejected');
+      return job.id;
+    } finally { active--; }
+  }, { concurrency: 2, dependsOn: job => job.deps });
+  assert.equal(nodeStartedEarly, true);
+  assert.equal(peak, 2);
+  assert.equal(executed.includes('blocked'), false);
+  assert.equal(results[5].status, 'rejected');
+  assert.equal(results[6].value, 'independent');
+  assert.deepEqual(results.slice(0, 4).map(result => result.status), Array(4).fill('fulfilled'));
+});
+
+test('dependency batches reject missing, duplicate and cyclic identities before any execution', async () => {
+  let calls = 0;
+  for (const jobs of [
+    [{ id: 'a', deps: ['missing'] }], [{ id: 'a', deps: [] }, { id: 'a', deps: [] }],
+    [{ id: 'a', deps: ['b'] }, { id: 'b', deps: ['a'] }]
+  ]) await assert.rejects(runConcurrentJobs(jobs, async () => { calls++; }, { dependsOn: job => job.deps }));
+  assert.equal(calls, 0);
+});
+
 function fixture(t, jobs) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'storyboard-batch-'));
   const source = path.join(directory, 'source.png');

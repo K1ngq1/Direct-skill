@@ -113,7 +113,7 @@ function checkReview(review, text, label, requireReview, version) {
     if (entry.score !== null && (typeof entry.score !== 'number' || !Number.isFinite(entry.score) || entry.score < 0 || entry.score > 5)) fail(`${label}维度分数须为0至5或null`);
     string(entry.reason, `${label}评分理由`);
     string(entry.evidence, `${label}评分证据`, true);
-    if ((entry.score > 0 && !entry.evidence.trim()) || (entry.evidence && !text.includes(entry.evidence))) fail(`${label}评分证据必须来自对应Prompt原文`);
+    if ((entry.score > 0 && !entry.evidence.trim()) || (entry.evidence && !text.includes(entry.evidence))) fail(`${label} 的 ${entry.dimension} 评分证据必须来自对应Prompt原文`);
   }
   if (review.scores.every(item => item.score === null)) fail(`${label}不能全部不适用`);
   for (const key of ['strengths', 'weaknesses']) { array(review[key], `${label}${key}`); review[key].forEach(value => string(value, `${label}${key}`)); }
@@ -253,7 +253,7 @@ export function sealPlan(directory, inputPlan) {
   return plan;
 }
 
-export async function exportVisualProject(directory, { videoWorkflow = null, calibration = false, bindWorkbook = null } = {}) {
+export async function exportVisualProject(directory, { videoWorkflow = null, calibration = false, bindWorkbook = null, deliveryCheck = null } = {}) {
   let checked;
   if (videoWorkflow) {
     const { validateVideoWorkflow } = await import('./video.mjs');
@@ -285,6 +285,13 @@ export async function exportVisualProject(directory, { videoWorkflow = null, cal
   const sceneFile = path.join(directory, 'scene-prompts.json');
   if (fs.existsSync(sceneFile) && (!v2 || !report.issues.some(row => row.path === '$.scene-prompts.json'))) context.sceneBundle = read(sceneFile);
   if (checked.sceneBundle) context.sceneBundle = checked.sceneBundle;
+  const planHash = hash(plan), workflowHash = videoWorkflow ? promptHash(JSON.stringify(videoWorkflow)) : null;
+  const verify = async () => {
+    const { verifyExcelDelivery } = await import('./excel_delivery.mjs');
+    return verifyExcelDelivery(directory, { plan, project, context, planHash, workflowHash });
+  };
+  const validation = { status: report.status, issues: report.issues };
+  if (deliveryCheck === 'read-only') return { validation, acceptance: await verify() };
   const files = await exportVisualExcel(displayPlan, project, videoWorkflow ? videoWorkflow.timeline.reduce((sum, row) => sum + row.seconds, 0) : totalSeconds, manifest, report, context);
   files.push({ filename: '制作日志.md', buffer: Buffer.from(exportVisualMarkdown(displayPlan, project, report, context), 'utf8') });
   let relativeOutput;
@@ -297,8 +304,13 @@ export async function exportVisualProject(directory, { videoWorkflow = null, cal
   }
   if (!calibration) {
     const { deliverExcel } = await import('./excel_delivery.mjs');
-    return deliverExcel(directory, { file: files[0], log: files.at(-1), planHash: hash(plan),
-      workflowHash: videoWorkflow ? promptHash(JSON.stringify(videoWorkflow)) : null, bindWorkbook, outputDirectory: path.resolve(directory, relativeOutput) });
+    const paths = await deliverExcel(directory, { file: files[0], log: files.at(-1), planHash, workflowHash,
+      bindWorkbook, outputDirectory: path.resolve(directory, relativeOutput) });
+    if (deliveryCheck === 'after-export') {
+      try { return { files: paths, validation, acceptance: await verify() }; }
+      catch (error) { return { files: paths, validation, acceptance: { status: 'invalid', issues: [error.message] } }; }
+    }
+    return paths;
   }
   if (bindWorkbook) fail('人工校准表不使用正式Excel绑定');
   const output = localFolder(directory, relativeOutput); fs.mkdirSync(output, { recursive: true });
@@ -403,10 +415,22 @@ export async function importFeedback(directory, filename) {
 
 async function main() {
   try {
-    const [command, directory, input] = process.argv.slice(2);
-    if (!directory) fail('用法：visual.mjs seal <project> <plan.json> | report/validate/export/export-calibration <project> | bind-excel <project> <existing.xlsx> | revise/add-candidate/select/restore <project> <request.json> | export-characters <project> | feedback <project> <ratings.xlsx>');
+    const [command, directory, input, option] = process.argv.slice(2);
+    if (!directory) fail('用法：visual.mjs seal <project> <plan.json> [--brief] | deliver/verify-excel <project> [video-revision.json] | report/validate/export/export-calibration <project> | bind-excel <project> <existing.xlsx> | revise/add-candidate/select/restore <project> <request.json> | export-characters <project> | feedback <project> <ratings.xlsx>');
     let result;
-    if (command === 'seal' && input) { const plan = sealPlan(directory, read(input)); result = { projectId: plan.projectId, status: 'sealed', ...(plan.schemaVersion === 2 ? { revision: plan.revision, validation: reportVisualProject(directory) } : {}) }; }
+    if (command === 'seal' && input) {
+      const plan = sealPlan(directory, read(input));
+      result = { projectId: plan.projectId, status: 'sealed' };
+      if (plan.schemaVersion === 2) {
+        const report = reportVisualProject(directory);
+        result.revision = plan.revision;
+        result.validation = option === '--brief' ? { status: report.status, issues: report.issues } : report;
+        if (option === '--brief' && report.assetHashes) {
+          result.assetBindings = Object.fromEntries(Object.entries(report.assetHashes).map(([kind, sourcePlanHash]) =>
+            [kind, { schemaVersion: 1, projectId: plan.projectId, sourcePlanHash, ...(kind === 'locations' ? { designStageVersion: 1 } : {}) }]));
+        }
+      }
+    }
     else if (command === 'report') { result = reportVisualProject(directory); if (!result.valid) process.exitCode = 1; }
     else if (command === 'validate') {
       const current = read(planFile(directory));
@@ -419,6 +443,11 @@ async function main() {
       try { result.files = await exportVisualProject(directory); result.exportsUpdated = true; }
       catch (error) { result.exportsUpdated = false; result.exportFailure = error.report ?? parseFailure(error); process.exitCode = 1; }
       if (!changed.accepted) process.exitCode = 1;
+    }
+    else if (command === 'deliver' || command === 'verify-excel') {
+      const videoWorkflow = input ? (await import('./video.mjs')).readVideoWorkflow(directory, input) : null;
+      result = await exportVisualProject(directory, { videoWorkflow, deliveryCheck: command === 'deliver' ? 'after-export' : 'read-only' });
+      if (result.validation.status !== 'passed' || result.acceptance.status !== 'passed') process.exitCode = 1;
     }
     else if (command === 'export') result = { files: await exportVisualProject(directory) };
     else if (command === 'bind-excel' && input) result = { files: await exportVisualProject(directory, { bindWorkbook: input }) };

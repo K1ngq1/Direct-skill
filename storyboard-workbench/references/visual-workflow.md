@@ -12,6 +12,8 @@
 
 ### 唯一创作状态
 
+执行效率与计时遵守[项目约束](../../AGENTS.md#执行效率与计时)。提速只减少重复读取、正文搬运、无变化导出和不必要的模型往返，不改变下述创作、版本、评分和检查合同。共用人物与场景先就绪，同阶段一次写入完整正文；Excel 直接消费同版 JSON。记录正文完成、核对完成、导出开始/结束及交付核验时间，区分模型创作与实际 Excel 程序耗时；从零重跑另建项目，仅导入本次授权原稿，不读取旧创作稿或生成回执作为答案。
+
 继续使用原稿 `project.json` 与创作 `visual-plan.json`。不改原件、单元格来源或历史正文。字段定义由随包合同供程序读取，不要求模型接口原生支持 JSON Schema。
 
 - 计划保留原有 `title/spec/productionInventory/props/references/designNotes/shots/calibration`。新增 `rules/run/revision/sourceResolutions/repairAttempts/changes`；`run` 至少包含 `{platform, model}`，未知模型用 `null`。宿主明确暴露的失败可写 `run.failures:[{category,message}]`，类别区分 network/unsupported/runtime/unknown 等；不可见的信息不推断。
@@ -28,7 +30,9 @@
 ### 封存、检查与局部修订
 
 ```text
-node "<skill>/scripts/visual.mjs" seal "<project>" "<plan.json>"
+node "<skill>/scripts/visual.mjs" seal "<project>" "<plan.json>" --brief
+node "<skill>/scripts/visual.mjs" deliver "<project>"
+node "<skill>/scripts/visual.mjs" verify-excel "<project>"
 node "<skill>/scripts/visual.mjs" report "<project>"
 node "<skill>/scripts/visual.mjs" validate "<project>"
 node "<skill>/scripts/visual.mjs" export "<project>"
@@ -37,7 +41,11 @@ node "<skill>/scripts/visual.mjs" revise "<project>" "<request.json>"
 
 `seal` 仅接受结构可用的新计划；输入文件不改写。`report/validate` 返回结构化问题，`passed/pending/invalid` 分别表示当前检查通过、有待处理项、存在结构/绑定错误；有问题时退出码非零。每项包含 `category/code/path/entityId/severity/message/requirement`。语法失败保留原始输入，不伪造镜头。仅解析 JSON 不算硬校验；无脚本能力时必须标记“未执行硬校验”，交接同一 JSON 及上述命令到可执行环境。
 
-上表是可用命令清单，不是每次全部执行的流水线。正常交付使用 `seal → export`；两个入口保留各自的边界校验，中间不再重复 `report → validate`。视频规划和图片批次结果使用下述 `video.mjs finalize` 集中封存与导出；具体错误统一修复后才再运行相关检查。
+新项目先创作并核对完整正文，`seal --brief` 初始化默认方案、项目身份与指纹，返回一次汇总的问题和本版 `assetBindings`。把已核对的人物数组与 `assetBindings.characters` 合成 `{...assetBindings.characters, characters}`，场景同理用 `{...assetBindings.locations, locations}`，以仅新建方式分别保存为人物和场景资产文件。已有绑定的资产沿用原版本核对规则。评分、语义证据和正文由评审者提供。
+
+随后执行 `deliver`。它调用原有导出入口并回读实际文件，一次返回计划检查 `validation`、文件验收 `acceptance` 和文件路径。两项均通过才报告验收完成。已导出的项目可单独执行只读的 `verify-excel`，视频项目追加对应的视频修订文件路径。程序按源镜覆盖、秒数、工作表、分组及完整正文集中核对，回报字体换行统计、内部链接数和实际文件回读毫秒数。用户自定排版按已有文件合同保留。规则版本变化仍按计划检查记录，只读复核不会刷新旧评分。
+
+视频规划用 `video.mjs finalize` 一次封存、导出并回读。`export` 继续用于单独导出，`report/validate` 用于诊断。程序检查完成后，按具体镜头、字段或单元格处理问题。模型另行核对人物关系、光线与切点等语义，保留核对者和文本证据。
 
 评分 review 沿用原合同。独立 `semanticReview` 为 `{reviewer,checks:[{rule,status,evidence,reason}]}`；rule 必须完整覆盖 `relationships/staticMoment/lighting/continuity`，status 为 `pass/issue/not-applicable`。核对必须有具体证据和原因；不适用也须说明。程序为显式提交的 review/semanticReview 绑定当前正文与来源哈希；旧核对不因修订自动刷新。AI 核对记录不等于独立人工验收，也不用于证明跨模型迁移成功。
 
