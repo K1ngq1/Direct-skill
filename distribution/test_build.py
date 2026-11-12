@@ -16,6 +16,15 @@ spec.loader.exec_module(builder)
 
 
 class StandalonePackageTests(unittest.TestCase):
+    def test_package_uses_one_readme_and_resolves_development_only_links_online(self):
+        text = (ROOT / 'README.md').read_text(encoding='utf-8')
+        files = {'AGENTS.md': b'', 'LICENSE': b'', 'storyboard-workbench/SKILL.md': b''}
+        converted = builder.package_readme(text, 'test-revision', files)
+        self.assertIn('mermaid', converted)
+        self.assertIn('](storyboard-workbench/SKILL.md)', converted)
+        self.assertIn('https://github.com/K1ngq1/Direct-skill/blob/test-revision/docs/', converted)
+        self.assertEqual(converted.count('flowchart'), text.count('flowchart'))
+
     def test_package_is_small_self_contained_and_runs_existing_pipeline_contracts(self):
         # Retain one isolated package and its logs as reproducible verification evidence.
         evidence = ROOT / 'artifacts'

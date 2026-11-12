@@ -167,7 +167,7 @@ export function createMediaBatchController() {
 }
 
 export async function runMediaPipeline(inputJobs, {
-  prepare, execute, capture, finalize, readControl, acknowledgeControl,
+  prepare, execute, capture, finalize, reconcileFinalization, onFinalizationCheck, readControl, acknowledgeControl,
   batch, initialStates, snapshot, concurrency = 4, finalizeConcurrency = 1, maxPendingFinalization = 4,
   callTimeoutMs = 300000, localTimeoutMs = 30000,
   controller = createMediaBatchController(), report = {}, run
@@ -230,6 +230,7 @@ export async function runMediaPipeline(inputJobs, {
   catch (error) { controller.stop(error.message ?? error); }
   const permitted = () => !controller.stopped && controller.state && !controller.state.paused && controller.state.version === expected?.version && controller.state.phase === expected?.phase;
   const call = async (callback, ...args) => { report.bridgeCalls++; return withDeadline(callback(...args), localTimeoutMs, '本地任务记录'); };
+  let checkingFinalizations = 0;
   const finish = async job => {
     try {
       const key = finalizerKey(job.id);
@@ -243,7 +244,37 @@ export async function runMediaPipeline(inputJobs, {
       if (state?.id !== job.id || state.persisted !== true || !['succeeded', 'failed', 'unknown'].includes(state.status) || (state.status === 'succeeded' && (typeof state.output?.path !== 'string' || !/^[a-f0-9]{64}$/i.test(state.output.sha256 ?? '')))) throw new Error('收尾回调未返回已持久化的实际结果');
       states.set(job.id, state); emit('finalized', job.id, { status: state.status });
     }
-    catch (error) { states.set(job.id, { id: job.id, status: 'unknown', stage: 'finalize', persisted: false, error: String(error.message ?? error), ...(error?.code ? { errorCode: error.code } : {}) }); dispatchStopped = '收尾记录未完成；先核对原回执'; }
+    catch (error) {
+      const check = { id: job.id, stoppedAt: now(), reason: String(error.message ?? error) };
+      (report.finalizationChecks ??= []).push(check);
+      checkingFinalizations++;
+      onFinalizationCheck?.(job.id, 'checking');
+      try {
+        if (finalizers.has(finalizerKey(job.id)) || error.code === 'FINALIZE_PENDING') throw new Error('原收尾尚未结束');
+        if (!reconcileFinalization) throw error;
+        const { state, control } = await call(reconcileFinalization, job.id);
+        if (state?.id !== job.id || state.persisted !== true || state.status !== 'succeeded' ||
+            typeof state.output?.path !== 'string' || !/^[a-f0-9]{64}$/i.test(state.output.sha256 ?? '')) throw new Error('缺少已核验的收尾结果');
+        await observe(control);
+        states.set(job.id, state);
+        check.outcome = 'verified';
+        if (!permitted() || dispatchStopped) check.blockedBy = controller.stopped ?? dispatchStopped ?? '批次已暂停或阶段已变化';
+      } catch (failure) {
+        check.outcome = 'unresolved';
+        check.blockedBy = String(failure.message ?? failure);
+        states.set(job.id, { id: job.id, status: 'unknown', stage: 'finalize', persisted: false, error: check.blockedBy, ...(error?.code ? { errorCode: error.code } : {}) });
+        dispatchStopped ??= '收尾记录未完成；先核对原回执';
+      } finally {
+        check.checkedAt = now();
+        checkingFinalizations--;
+        if (check.outcome === 'verified' && !checkingFinalizations && !check.blockedBy) {
+          check.resumedAt = check.checkedAt;
+          check.stopToResumeMs = Date.parse(check.resumedAt) - Date.parse(check.stoppedAt);
+        }
+        onFinalizationCheck?.(job.id, check.blockedBy ? 'stopped' : 'verified', check.blockedBy);
+        changed();
+      }
+    }
   };
   const generate = async (job, token) => {
     let envelope, reserved = false, preparingThisJob = true;
@@ -266,6 +297,7 @@ export async function runMediaPipeline(inputJobs, {
       }
       if (prepared.action !== 'execute') throw new Error('任务准备返回未知操作');
       // No await between this gate and invoking the tool: a stale prepare cannot dispatch after an observed pause.
+      while (checkingFinalizations) await signal;
       if (!permitted() || dispatchStopped) { states.set(job.id, { id: job.id, status: 'paused' }); return; }
       const callStartedAt = now(), began = tick();
       // Outstanding promises do not measure tool execution or server compute concurrency.
@@ -319,7 +351,7 @@ export async function runMediaPipeline(inputJobs, {
       if (failedDependency) { pending.splice(index, 1); states.set(job.id, { id: job.id, status: 'blocked', stage: 'dependency' }); }
       else if (!readyTimes.has(job.id) && (job.dependsOn ?? []).every(dep => states.get(dep)?.status === 'succeeded')) { readyTimes.set(job.id, now()); emit('ready', job.id); }
     }
-    while (permitted() && !dispatchStopped && generating.size < controller.state.concurrency && queue.length + reservations < maxPendingFinalization) {
+    while (permitted() && !checkingFinalizations && !dispatchStopped && generating.size < controller.state.concurrency && queue.length + reservations < maxPendingFinalization) {
       const index = pending.findIndex(job => (job.dependsOn ?? []).every(dep => states.get(dep)?.status === 'succeeded'));
       if (index < 0) break;
       const [job] = pending.splice(index, 1); launch(generating, token => generate(job, token));

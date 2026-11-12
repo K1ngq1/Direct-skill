@@ -208,6 +208,15 @@ export function createGenerationPipelineStore(directory, jobs, { batchId, versio
     for (const folder of ['results', 'captures', 'requests', 'claims']) if (fs.existsSync(file(folder, job.id))) return checked(job, read(file(folder, job.id)));
     return null;
   };
+  const verifySaved = (job, state) => {
+    const captured = checked(job, read(file('captures', job.id)));
+    if (captured.status !== 'returned' || captured.persisted !== true || state?.status !== 'succeeded' ||
+        state.persisted !== true || state.stage !== 'finalize' || !captured.payloadHash ||
+        state.payloadHash !== captured.payloadHash || digest(state.receipt) !== digest(captured.receipt) ||
+        !captured.sourcePath || state.sourcePath !== captured.sourcePath ||
+        state.output?.path !== `images/${job.id}${path.extname(captured.sourcePath).toLowerCase()}`) fail('已保存结果与原任务回执冲突');
+    validateLocalImage(root, state.output);
+  };
   return {
     run,
     jobs: JSON.parse(JSON.stringify(jobs)),
@@ -215,13 +224,20 @@ export function createGenerationPipelineStore(directory, jobs, { batchId, versio
     snapshot() {
       return Object.fromEntries(jobs.flatMap(job => {
         const state = load(job.id);
-        if (state?.status === 'succeeded') validateLocalImage(root, state.output);
+        if (state?.status === 'succeeded') verifySaved(job, state);
         if (!state) return [];
         const { request, resolvedReferences, ...summary } = state;
         return [[job.id, summary]];
       }));
     },
     readControl, load,
+    reconcileFinalization(id) {
+      const job = jobFor(id);
+      if (finalizationLock(root, id).inspect()) fail('原收尾仍持有文件锁');
+      const state = checked(job, read(file('results', id)));
+      verifySaved(job, state);
+      return { state, control: readControl() };
+    },
     setControl(change, { receivedAt = new Date().toISOString() } = {}) {
       if (!change || Object.keys(change).some(key => !['version', 'phase', 'paused', 'concurrency'].includes(key))) fail('控制变更字段无效');
       if (!Number.isFinite(Date.parse(receivedAt))) fail('控制指令时间无效');
@@ -244,7 +260,7 @@ export function createGenerationPipelineStore(directory, jobs, { batchId, versio
         if (item.status === 'succeeded') {
           const saved = load(item.id);
           if (saved?.status !== 'succeeded' || digest(saved.output) !== digest(item.output)) fail('汇总成功项缺少实际保存结果');
-          validateLocalImage(root, saved.output);
+          verifySaved(jobFor(item.id), saved);
         }
       }
       const control = readControl(), summaryId = randomUUID(), filename = `summary-${summaryId}.json`;
@@ -268,7 +284,7 @@ export function createGenerationPipelineStore(directory, jobs, { batchId, versio
       let control = readControl();
       const existing = load(id);
       if (existing) {
-        if (existing.status === 'succeeded') validateLocalImage(root, existing.output);
+        if (existing.status === 'succeeded') verifySaved(job, existing);
         return { action: existing.status === 'returned' ? 'finalize' : 'skip', state: existing, control };
       }
       if (!allowed(control)) return { action: 'paused', control };

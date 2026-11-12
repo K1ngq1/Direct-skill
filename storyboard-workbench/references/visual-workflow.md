@@ -1,264 +1,92 @@
 # Excel 画面工作流程与数据合同
 
+按当前操作读取下表指定合同；同一任务已读且哈希未变的正文复用。核心十一维、摄影、连续性及授权保护继续生效。旧标题保留定位，完整合同各有唯一正文。
+
+| 当前操作 | 读取 |
+|---|---|
+| 编写新 v2 JSON | [字段与资产绑定](visual-v2-contract.md)及[Schema](../schemas/visual-plan-v2.json) |
+| 新稿封存、检查 | [封存与文件验收](visual-seal.md) |
+| 交付正式 Excel | [三表及集中导出](excel-delivery.md) |
+| 更新已有 Excel 或处理冲突 | [工作簿更新](excel-update.md) |
+| 局部修订、候选、恢复 | [版本修订](visual-revision.md) |
+| 已授权生图、采用与图片检查 | [资产先行](visual-assets.md)及[媒体任务索引](media-execution.md) |
+| 规划、时长与表达专项核对 | [规划约定](visual-planning.md) |
+| 继续 v1 或导入历史评分 | [既有项目合同](visual-legacy.md) |
+
+
 用户明确授权一次完成生图并准备 LibTV 视频节点时，追加[单次自动制作](single-run.md)：仅显式启用的 v2 项目允许实际检查后的 Agent 采用解锁下游，用户确认仍待定，视频不执行。其他项目沿用本文件的确认要求。
 
 新任务采用 `schemaVersion: 2`、`mode: "visual-excel-v2"`，评分仍为 `visual-v2`。本模式由当前 Agent 创作，程序归档、校验与导出；Excel 总表优先，不依赖网页、逐镜选择或常驻后台。用户要求图片时，由当前 Agent 调用当次可用且获授权的图片工具。基础流程只读取本 Skill、本次输入与本次明确要求。版本化人工评分标准不是完成第一套文本的前提。
 
+
 ## 新版程序入口与合同
 
-旧 `visual-excel-v1` 继续使用下文第5、6节记录的冻结数据合同，不自动迁移；首次正式交付按下方三表规范，已绑定的正式文件继续保留其排版，历史文件保持原件。新版使用本节与 [机器可读字段合同](../schemas/visual-plan-v2.json)，其他章节的导演、静帧和图片授权规则继续适用。一次创作后做独立语义核对；发现具体结构或语义错误时最多两轮局部修复，不按低分反复改稿。Excel 首表用于顺着镜序阅读故事，评分与检查过程保留在后台制作日志。
+完整内容见[v2 创作状态与字段合同](visual-v2-contract.md#新版程序入口与合同)。
 
 ### 启动与阶段规则
 
-启动与阶段读取统一按[共用 Skill](../SKILL.md#启动与规则读取)；能力观察、规则分块与参数说明见[适配参考](../adapters/README.md)。本页是封存、修订与 Excel 交付合同，按任务读取，不作为所有阶段的公共正文。
+完整内容见[v2 创作状态与字段合同](visual-v2-contract.md#启动与阶段规则)。
 
 ### 唯一创作状态
 
-执行效率与计时遵守[项目约束](../../AGENTS.md#执行效率与计时)。提速只减少重复读取、正文搬运、无变化导出和不必要的模型往返，不改变下述创作、版本、评分和检查合同。共用人物与场景先就绪，同阶段一次写入完整正文；Excel 直接消费同版 JSON。记录正文完成、核对完成、导出开始/结束及交付核验时间，区分模型创作与实际 Excel 程序耗时；从零重跑另建项目，仅导入本次授权原稿，不读取旧创作稿或生成回执作为答案。
-
-继续使用原稿 `project.json` 与创作 `visual-plan.json`。不改原件、单元格来源或历史正文。字段定义由随包合同供程序读取，不要求模型接口原生支持 JSON Schema。
-
-- 计划保留原有 `title/spec/productionInventory/props/references/designNotes/shots/calibration`。新增 `rules/run/revision/sourceResolutions/repairAttempts/changes`；`run` 至少包含 `{platform, model}`，未知模型用 `null`。宿主明确暴露的失败可写 `run.failures:[{category,message}]`，类别区分 network/unsupported/runtime/unknown 等；不可见的信息不推断。
-- `seal` 初始化稳定 `projectId`、原件哈希、规则快照、revision=1 和修订记录。不沿用另一项目 ID；后续修订保持该身份。`run` 是操作者记录，不是平台能力实测证明。
-- 运行环境恢复或更换模型时用 `revise` 的 `kind:"runtime"` 与非空 `run` 补丁更新记录，保留 `baseRevision/actor/reason`；只修改运行信息，不消耗两轮内容修复，也不使未变镜头评分过期。`failures` 保留原文并只追加，恢复时追加 `failureResolutions:[{failureIndex,reason,resolvedAt}]`；序号从0开始，必须指向已有失败。新能力声明需附观察依据，切换宿主或模型后不能默认继承旧能力。
-- 资产沿用 `characters[].id`、`locations[].id`；镜头沿用 `id/sourceShotIds/locationId`。每个角色、场景和道具新增 `provenance`，原有 name/description/basis 保留，道具不要求 basis。
-- 每镜保留原十一维、Shot Schema、transition、motion、reuseOf、prompt 与 review；增加 `intent`（画面目的）、`optics`、`provenance`、`notApplicable`、`semanticReview`、`variantId/selection/candidates`。默认方案由程序初始化，无需人工选择。新增字段不进入旧字段拼接器。
-- 用户要求视频 Prompt 时可增加 `videoPrompt` 非空文本，写动作起止、时间变化、节奏与运镜，与静态 `prompt.text` 分开。未要求时省略，不用空串或 null 充数；`motion` 仍是动作及剪辑编排记录。视频文字沿用同一人物、场景、道具、时长及连续性，进入修订和候选校验与来源哈希；正文更改使相应检查和评分过期。现有十一维评分只评价静态 Prompt，不代表视频文本质量。完整视频正文进入“生成Prompt”，主表呈现可阅读的动作和运镜；字段不触发媒体调用。需要图片验收、视频镜头和时间线规划时按[视频工作流](video-workflow.md)绑定独立版本状态，不复制既有权威正文。
-- `optics` 为 `{focalLengthMm,aperture,focus,depthOfField,frameBasis,basis}`：前两项为正数，其余为文本。正文自然表达同一焦距、f/值和清晰范围；数值一致不能证明物理拍摄成立。
-- 人物 position/orientation/pose/visibleParts 必须逐人记录。appearance/clothing/hands/gaze/expression 若不适用，在本镜 `notApplicable` 用 `subjects.<assetId>.<field>` 写原因；不强造不可见面孔。无人镜的 subjects 为空。道具逐个写 state、position 和 holderAssetIds。
-- 依据记录为 `{field,kind,basis,sourceShotIds}`，kind 为 `source/user/director/unknown`。原文事实必须绑定源镜；用户确认应在 basis 保存具体要求；导演设计须明确说明；unknown 阻止显示为已完成。资产至少为 description 记录依据；镜头至少覆盖 intent、dimensions.moment、dimensions.camera、dimensions.composition、dimensions.lighting、optics、shotSchema。可在 basis 中分别列明该字段内部的原事实和补全，不把混合内容一律称原文。
-- 原稿 reviewIssues 不静默丢弃。通过 `sourceResolutions:[{issueId,decision:"resolved"|"excluded",reason}]` 记录处理；排除工作表须说明实际内容和理由，不清空原稿问题列表。
+完整内容见[v2 创作状态与字段合同](visual-v2-contract.md#唯一创作状态)。
 
 ### 封存、检查与局部修订
 
-```text
-node "<skill>/scripts/visual.mjs" seal "<project>" "<plan.json>" --brief
-node "<skill>/scripts/visual.mjs" deliver "<project>"
-node "<skill>/scripts/visual.mjs" verify-excel "<project>"
-node "<skill>/scripts/visual.mjs" report "<project>"
-node "<skill>/scripts/visual.mjs" validate "<project>"
-node "<skill>/scripts/visual.mjs" export "<project>"
-node "<skill>/scripts/visual.mjs" revise "<project>" "<request.json>"
-```
-
-`seal` 仅接受结构可用的新计划；输入文件不改写。`report/validate` 返回结构化问题，`passed/pending/invalid` 分别表示当前检查通过、有待处理项、存在结构/绑定错误；有问题时退出码非零。每项包含 `category/code/path/entityId/severity/message/requirement`。语法失败保留原始输入，不伪造镜头。仅解析 JSON 不算硬校验；无脚本能力时必须标记“未执行硬校验”，交接同一 JSON 及上述命令到可执行环境。
-
-新项目先创作并核对完整正文，`seal --brief` 初始化默认方案、项目身份与指纹，返回一次汇总的问题和本版 `assetBindings`。把已核对的人物数组与 `assetBindings.characters` 合成 `{...assetBindings.characters, characters}`，场景同理用 `{...assetBindings.locations, locations}`，以仅新建方式分别保存为人物和场景资产文件。已有绑定的资产沿用原版本核对规则。评分、语义证据和正文由评审者提供。
-
-随后执行 `deliver`。它调用原有导出入口并回读实际文件，一次返回计划检查 `validation`、文件验收 `acceptance` 和文件路径。两项均通过才报告验收完成。已导出的项目可单独执行只读的 `verify-excel`，视频项目追加对应的视频修订文件路径。程序按源镜覆盖、秒数、工作表、分组及完整正文集中核对，回报字体换行统计、内部链接数和实际文件回读毫秒数。用户自定排版按已有文件合同保留。规则版本变化仍按计划检查记录，只读复核不会刷新旧评分。
-
-视频规划用 `video.mjs finalize` 一次封存、导出并回读。`export` 继续用于单独导出，`report/validate` 用于诊断。程序检查完成后，按具体镜头、字段或单元格处理问题。模型另行核对人物关系、光线与切点等语义，保留核对者和文本证据。
-
-评分 review 沿用原合同。独立 `semanticReview` 为 `{reviewer,checks:[{rule,status,evidence,reason}]}`；rule 必须完整覆盖 `relationships/staticMoment/lighting/continuity`，status 为 `pass/issue/not-applicable`。核对必须有具体证据和原因；不适用也须说明。程序为显式提交的 review/semanticReview 绑定当前正文与来源哈希；旧核对不因修订自动刷新。AI 核对记录不等于独立人工验收，也不用于证明跨模型迁移成功。
-
-修订请求为：
-
-```json
-{
-  "baseRevision": 1,
-  "actor": "agent",
-  "reason": "纠正本镜持物人归属",
-  "kind": "repair",
-  "shotEdits": [{"id": "V001", "changes": {"shotSchema": "此处填写完整的新Shot Schema对象", "prompt": {"text": "此处填写修正后的完整自然正文"}}}]
-}
-```
-
-上述示例中的说明文字必须替换为合同规定的真实对象。`changes` 只允许合同 `shotEditable` 中的字段；不修改源镜映射或稳定 ID。`assetEdits:[{kind:"characters"|"locations"|"props",id,changes}]` 定向修改已登记资产；可显式更新 spec、sourceResolutions 或 `refreshRules:true`。后者使旧核对按新规则过期。共享资产只影响实际引用它的镜头和声明的下游依赖。
-
-- `kind:repair` 最多两轮，失败也计数。失败请求和错误保存在修订快照中，主稿保持原内容，状态明确待处理；不会程序调用模型自动改写。
-- `kind:review` 仅提交新评分/语义核对，不改画面。`kind:edit` 用于用户新发起的定向修订，必须附非空 `userRequest` 原话，不能把自动纠错改个类别来绕过上限。
-- 每次写入检查 baseRevision，使用锁、快照和临时文件原子替换主状态。旧正文、评分、修改请求与受影响镜号留在 `visual-revisions/`。写入失败不假称成功；相同请求可恢复经过哈希核对的未完成快照。进程崩溃遗留锁时，先核实原进程已停止，再只处理该项目一个明确的锁文件。
-- `add-candidate <project> <request.json>` 请求包含 baseRevision/actor/reason/shotId 和 `candidate:{id,difference,changes}`。只在用户要求调整时创建；必须明确构图或机位差异，校验候选不采用它。
-- `select <project> <request.json>` 请求含 baseRevision、`actor:"user"`、reason、shotId、candidateId。候选绑定来源与正文双哈希，过期不能覆盖新稿。选择保留旧版，不代表用户确认画面质量。
-- `restore <project> <request.json>` 请求含 baseRevision、`actor:"user"`、reason、targetRevision。恢复为新的修订号，不抹去修复次数或历史。
+封存与检查见[新稿验收](visual-seal.md#封存检查与局部修订)；修订、候选和恢复另读[版本修订](visual-revision.md)。
 
 ### 资产、总表与交接
 
-场景资产写作前，先完成[场景美术与陈设设计](scene-art-direction.md)，流程为“场景信息 → 场景美术与陈设设计 → 场景 Prompt”。按稳定场景 ID 保存一份共用设定，各机位与分镜引用其可见部分；六项设计、已有正负约束冲突审查、确认后变更及跨镜核对统一按该规则执行。设计维度不由程序拼接成正文。
-
-新版人物/场景文件仍分别使用 `character-prompts.json`、`scene-prompts.json`。`report.assetHashes.characters/locations` 提供对应 `sourcePlanHash`，绑定该类资产依赖而不是整个计划 JSON；仅评分或修订号变化不会使资产正文过期。原 v1 文件继续使用完整计划哈希。新文件需覆盖全部登记资产；人物不需头像或被阻塞时分别写 not-required/blocked，不能漏行。无人项目无需人物文件。
-
-普通 `export` 首次创建三表 Excel 后固定该文件；以后更新同一路径的文案值，后台 `制作日志.md`、检查 JSON 和交付历史按版本保留。已有正式 Excel 使用下方 `bind-excel` 登记，不搬动或复制为另一份正式文件；实际位置以命令返回为准。缺资产正文、缺核对或过期评分等内部状态记录在后台，缺图与影响制作的具体问题才以“待补图”或短备注进入脚本。无法安全更新的结构、空间或用户文字冲突须先处理，不能重做排版绕过。revise/add-candidate/select/restore 保存后自动更新已绑定的正式 Excel；若更新失败，结果分别报告 `stateSaved:true/exportsUpdated:false`，不能说总表已经更新。
+完整内容见[v2 创作状态与字段合同](visual-v2-contract.md#资产总表与交接)。
 
 ### 正式 Excel 与后台日志
 
-默认只交付一个固定的 `<片名>_分镜脚本.xlsx`，使用当前采用方案。首次创建以下三表，不加封面、评分说明、技术说明或隐藏工作表：
-
-| 顺序 | 工作表 | 内容 |
-|---|---|---|
-| 1 | 分镜脚本 | 镜号、起止时间、预计时长、场景与人物、分镜图、画面与动作、对白与声音、摄影与运镜、衔接备注、用户意见 |
-| 2 | 生成Prompt | 类型、对应镜号或名称、完整人物／场景／静帧／视频正文；按需加入独立视频参数与全片音乐正文，主表可跳转，附表可返回 |
-| 3 | 人物与场景 | 名称、参考图、必要造型或共用场景美术与空间设定、关联镜头 |
-
-- 主表每条分镜一行，按故事顺序排列；静帧起止配对或复用的制作时间不重复累计。画面、动作与摄影用简明制作语言表达，不把十一项内部维度横向展开，不以逐维字段拼接替代完整正文。
-- Prompt 保留完整原文；首次排版必要时按原有完整段落分组续行，不从词句中间切开，续行拼接须逐字还原正文。切分和行高使用同一保守换行估算，为字体及阅读软件差异留足空间，不只检查单元格存有文字。后续只使用已有续行空间，文案缩短可清空多余正文单元格但不删除行；空间不足或单段无法完整显示时指出类型、镜号或资产及位置，保持文件原样，不扩行、不缩字、不隐藏或删减正文。原稿对白和导演新增文字辨明；内部来源定位与调整依据进入日志。
-- 图片保持原比例并统一显示尺度，缺图写“待补图”，复用写明镜号。问题图可作预演占位，备注具体影响；不能以 Agent 检查或选图代替用户确认。
-- 首次新建统一 `Microsoft YaHei`，正文 11pt、标题 16pt；深灰蓝表头、浅色行底、轻分隔线，顶部对齐、自动换行，按图片与正文调整行高。冻结表头与镜号，支持筛选、横向打印及重复表头。后续替换文案保留当前字体、列宽、行高、行列结构、图片、链接及页面设置，不重套这些默认样式；实际中文显示需在目标环境检查。
-- 主表第10列“用户意见”为可填写区域，淡黄标识；其他正文不作为反馈输入。视频工作流按版本导回意见，仅保存真实填写，不自动确认图片、改稿或评分。
-- AI 分数、评分理由、评分条、逐维证据、内部 ID、哈希、校验报告、规则版本、来源映射、重试次数和运行过程全部进入后台 `制作日志.md` 与内部 JSON，不进入任何 Excel 单元格、隐藏表或批注。用户需要处理的制作问题只写具体短句，不放技术堆栈。
-
-首次普通 `export` 自动登记固定正式文件。接手已有文件时先绑定对应版本，再继续使用原来的 `export` 命令：
-
-```text
-node "<skill>/scripts/visual.mjs" bind-excel "<project>" "<existing.xlsx>"
-node "<skill>/scripts/video.mjs" bind-excel "<project>" "<revision.json>" "<existing.xlsx>"
-```
-
-- 绑定保留现有路径和工作簿，不另做一份正式 Excel；路径中即使带旧版号也继续使用，由后台记录绑定实际版本。
-- 局部改稿、全文重新生成都按稳定镜号、Prompt 类型及资产映射更新文案值。没有内容变化时不重写文件；不得为了导出新版本而重新布局、移动图片或重建链接。
-- 每次更新前保存原文件的完整字节备份，更新后保存实际交付基线；备份、版本和映射只作内部资料。后续意见导回与该版本的实际基线比对，不能用默认排版重新生成核对文件。
-- 用户意见始终保留。用户直接修改正文时不自动写回 JSON；若新源也要改变同一单元格且内容冲突，保留原件并指出位置，不覆盖用户文字。镜头、资产、Prompt 类型或续行结构无法安全对应时同样停止更新，不能猜测映射或擅自扩表。
-
-用户另行明确授权换分镜图时，同一文件可替换PNG并补现有空图槽，只更新该槽的原图链接；既有锚点、样式和用户意见保留。原图有人工修改时仍按源图、实际图和新图核对冲突，不自动替换人物或场景资产。此能力不触发图片生成。
-
-一批生成或补图的回调只保存单张原件和结果，不逐张导出。批次结果收齐后集中准备一次输入，用 `node "<skill>/scripts/video.mjs" finalize "<project>" "<input.json>"` 完成封存及一次 Excel 回写；未变化文件不重写。空间不足会一次列出所有发现的位置，原文件保持不变；统一处理后使用已封存版本重新 `export`，避免为同一已保存状态再封存一版。失败回执分别报告 `stateSaved` 与 `exportsUpdated`，不能将已封存状态或尚未更新的 Excel 说成已交付。
-
-后台日志保留评分及有效性、语义核对、版本变化、生成失败、真实人评与反馈绑定；原稿、已封存 JSON、历史备份和既有 `textscore` 记录不覆盖。默认脚本交付不附人工校准表，用户明确要求时才用 `visual.mjs export-calibration <project>`；其独立导出和人评导入继续沿用历史合同，不套用正式脚本的原位更新规则。
-
-JSON 是正文权威，Excel 和日志引用同版内容，不另建平行网页正文。GLM 使用用户既有 API 配置，本项目没有模型 API client。通过[适配层](../adapters/README.md)显式选择宿主与模型；Codex、Claude Code、WorkBuddy 入口引用同一 Skill，实际能力以运行证据为准，不能从文档支持推定端到端通过。
+交付见[三表与日志合同](excel-delivery.md#正式-excel-与后台日志)；已有文件另读[更新与冲突合同](excel-update.md)。
 
 ## 0. 可调整的完整 Prompt 与分阶段出图默认流程
 
-以下是后续任务无需重述即可采用的默认规则，不是限制用户调整的固定模板。用户当前明确的交付范围、工具、视图形式、数量及阶段要求优先；只请求 Prompt、Excel 或评分时，交付文本，不自动生图。只做本次要求的阶段，不顺带制作视频、音频、剪辑或其他内容。
-
-1. **先完成整套文本并保存请求。** 按[准备入口](media-execution.md#prompt-阶段准备与-node-存储入口)保存可直接使用的请求和来源；未确定工具、参数或确认参考的任务标待就绪。聊天不重复展开全文，用户需要时再显示，正式 Excel 仍保留完整正文。 读取本次脚本后统一角色、场景、道具和连续性；场景先按[场景美术规则](scene-art-direction.md)设计并保存共用设定，再组织资产与各机位正文。交付人物资产 Prompt、场景资产 Prompt、全片分镜 Prompt。正式分镜每个必要画面单元一案；快切与表情首末帧按剧情需要拆开，保留源镜号，定格明确复用。原稿事实与本次导演设定分开，不能靠历史项目或个人记忆补齐。
-2. **道具描述进入画面。** 手持物和场景道具保留稳定 ID、持有者、左右手、位置、接触关系与跨镜状态，写入需要它们的分镜正文及场景布置；默认不为道具另写独立 Prompt、不建立独立道具出图任务。人物三视图不把某一镜的持物固定成人物身份；仅露手或衣袖的辅助角色不强造面孔。
-3. **资产先行。** 用户要求生图时，先生成全部需要的人物与场景资产。人物按[独立视图交付](character-prompts.md#独立视图与已确认造型补图)保留已有三联总览，并补齐正面、侧面90度、背面三张独立9:16全身图和一张独立1:1正面大头照。场景及后续场景画面默认16:9，每个必要机位分别组织 Prompt，每张图独立生成。使用 imagegen 时，每个场景默认安排2–3张独立候选供用户选择，先记录本批目标总数与已有候选，再补足；此数量规则只用于场景资产，不自动套用人物、分镜或 LibTV。三联拼图只用于用户选用的展示，不将整张拼图的16:9误当成每个视角的16:9。已有适用且确定采用的真实参考可复用。具体数量、视角、画幅与服装版本均可由本次用户要求调整；不为补视图新增人物、房间或独立道具任务。
-4. **先展示资产，再进入分镜。** 保存并展示首批实际资产图，等待用户确认采用或提出修改。生成完成、Agent 自检通过和用户确认分别记录，不能互相代替。未确认图不进入后续分镜参考，也不提前提交依赖它们的分镜。用户确认后，把确认的资产版本绑定到各镜并核对、冻结用于提交的正文；每条需要新图的分镜 Prompt 只生成一张，复用帧不重复提交，不生成多个备选。
-5. **按工具能力异步执行。** Codex/imagegen 默认单槽，其他工具默认四槽，用户明确并发要求优先；按实际配置滚动调度，所有人物、场景及其视角和候选共用一个就绪队列；任一槽完成即补入下一条，不等待同批其他任务。槽位数是可调整的调度目标，不是平台最大容量或已经验证的服务上限；实际并发上限以当次工具能力为准。依赖尚未完成或参考未确认的任务仍等待依赖；工具不支持时按实际能力执行，不虚构后台队列。普通单 Agent 可编排提交与检查；只有独立核对能提高质量或效率时才选用多 Agent，不能根据是否有 subagent 推断后端能否并发。逐张保留项目、资产或镜头 ID、视角及候选 ID、Prompt 版本与哈希、输入参考、任务身份、输出路径与哈希和实际结果。明确成功后保存图片到项目并回读检查；失败保留原因。结果未知时回读原任务，不通过新调用猜测性重试。遇到明确限流时尊重工具给出的等待要求，减少后续未提交任务的并发；不以增加槽位绕过限流。后续从记录中恢复，只提交尚未提交的单元；不把并发任务宣称为已完成。已计划的场景候选属于本批数量，不是失败重试；完成计划数量后停止，不因评分、外貌漂移或工具错误自动追加图片，定向修订按用户本次要求另存版本。
-6. **工具与参考来源。** 按用户当次指定的可用工具执行；选择 imagegen 时走内置工具，每张候选单独调用一次、每次生成一张，不暗自切换 CLI/API。用户指定 LibTV 时，若本批数量未知，可先询问每条 Prompt 生成几张；数量已知不重复询问，再按其当次工作流核验连接、目标项目与模型能力，不套用 imagegen 的场景候选数量，也不把其他工具测试当成已经接通 LibTV。用户或客户明确提供并指定用途的图片，以及本项目生成、已实际查看且经用户确认采用的图片，都可成为参考；保留其真实来源、用途、资产绑定与版本，不能把生成图记成用户原始附件。写法截图、历史图库及未确认结果不自动成为参考。
-
-人物可选痣、雀斑等继续遵守[人物资产规则](character-prompts.md)，不默认加入。文本单轮核对与评分、图像检查、用户资产确认是三个独立步骤；不因采用分阶段出图而恢复旧工作台的逐镜候选选择或全片审批流程。后文的无参考写法用于尚无已确认图片的对象，确认后按[参考图精简规则](#已有确定参考图时)建立新的准确绑定版本。
+完整内容见[资产先行与图片检查](visual-assets.md#0-可调整的完整-prompt-与分阶段出图默认流程)。
 
 ### 场景独立画幅与七项图像检查
 
-场景紧凑先检查单个视角的可用画幅、相机距离、取景范围和通行空间；方向错误先检查固定布局与机位映射。把宽图分成三个窄栏会减少每个视角的横向空间，单纯增加广角不能修复错误的门窗或家具关系。目标16:9写入实际工具支持的参数或提交说明，并核对输出宽高；目标值与实际结果分别记录，不以展示拼图的外框比例代替单图验收。
-
-以下七项分别核对，不新增评分权重，也不以总分抵消明确空间错误。普通单 Agent 能逐项完成；有独立审查者时可分配不同项，但仍以同一布局与图像为依据。实际看图后记录具体对象和证据；画外或被遮挡而无法判断的项记为未核验，不把文字正确当作图片通过。
-
-| 检查维度 | 核对内容与定向处理 |
-|---|---|
-| 布局拓扑 | 固定房间的墙、门、窗、入口、床、沙发、电视及海岸之间的邻接、对面与朝向关系；先修正这些关系，再调整美术，不随机位镜像户型。 |
-| 相机位置与朝向映射 | 每个视角交代相机所在位置和朝向对象，以同一个明确观察基准判断哪些墙面、物体和侧面应进入画面；世界空间的左右不能直接当成所有机位的画面左右。 |
-| 取景覆盖与空间余量 | 在独立16:9画面中保留本视角必要边界、前后景、通道和使用空间；不强迫每张都展示全部家具，也不靠把物件挤近来满足同框。 |
-| 透视与尺度 | 检查消失方向、垂直线、前后大小和家具比例；相机距离与视角须容纳真实空间，广角不能把床、门或椅子拉成无法使用的形状。 |
-| 道具数量、位置与功能 | 核对固定数量、实际摆位、接触与用途，防止复制、缺失或漂移。海边椅子的扶手是手部承托结构，必须位于可用位置并与椅身连接；不能仅有装饰线条、缺一侧或遮断坐卧空间。 |
-| 光源与受光方向 | 光源在空间中的位置、软硬和时段保持一致；换机位后按几何关系检查亮面、阴影与反射，不强行让每张图都“画面左侧来光”。 |
-| 跨视角同一空间 | 对照各独立图的门窗、家具数量、材质、颜色、开闭及道具状态；区分正常遮挡与真实变化，确保是同一空间换机位，而非数个相似房间。 |
-
-多机位、场景候选与人物补图逐张建立生成记录，关联同一资产、准确视角及对应 Prompt，不把多个视角或 imagegen 候选塞进一条 `count > 1` 的请求。保留每张候选的版本、哈希、输出及待确认状态，不覆盖已有确认图或旧任务；生成候选不代表用户采用，只有实际确认后才绑定为后续参考。现有单资产单正文合同未支持的部分须按本次可用合同明确记录，不能仅因规则更新宣称旧校验器已支持多视图或多候选。
-
-继续既有v1项目进行本轮人物补图时，原三联图任务保持原数量，冻结分镜不迁移。附属计划保存为 `character-views-v1/plan.json`，每条结果保存为 `character-views-v1/results/<asset>-<view>.json`，记录 `assetId/view/inputReference.sha256/promptHash/spec/status/output`，由 Agent 编排十二条独立任务（本次三个已确认人物，各四张）。旧 `generation-manifest.json` 仅按用户真实回答确认对应三个人物原图，场景保持未确认；这不是对后续新项目人物数或确认状态的默认假设。旧单 `base` 导出与清单不能直接代表多视图支持，附属任务也不表示已有程序会自动提交、校验或生成这些视图。
+完整内容见[资产先行与图片检查](visual-assets.md#场景独立画幅与七项图像检查)。
 
 ### 本地文件与执行入口
 
-`character-prompts.json` 和 `scene-prompts.json` 分别保存人物、场景正文；两者均以 `projectId` 与 `sourcePlanHash` 绑定冻结的 `visual-plan.json`。场景文件为 `{ schemaVersion: 1, projectId, sourcePlanHash, locations: [{ assetId, base: { mode: "generate", text, referenceIds: [], basis } }] }`，`assetId` 对应本项目场景清单。`node <skill>/scripts/visual.mjs export <project>` 会校验并导出已存在的两份资产文件；不需要另外启动服务。
-
-现有单图任务保存 `generation-manifest.json` 并执行 `node <skill>/scripts/generation.mjs validate <project>`。清单以同样的项目与计划哈希绑定版本，`tasks` 逐条保存 `id`、`phase`（`assets` 或 `storyboards`）、`targetType`、`targetId`、`promptHash`、`count: 1`、`status`、`inputReferenceIds`、`output` 和 `approval`。输出保存项目内相对 `path` 与 `sha256`；未完成输出为 `null`。状态只用 `planned/submitted/succeeded/failed/unknown`，未获用户确认时保留 `approval: { status: "pending", by: null }`，实际确认才记录 `confirmed`、`by: "user"` 及 `confirmedAt`。
-
-确认生成图的参考记录使用 `origin: "generated-confirmed"`，并记录 `assetId`、`generationTaskId`、`path`、`sha256`、`purpose`、`userProvided: false`。校验器核对任务输出、确认记录、实际文件和人物／场景绑定；参考变更后另存新版本并重新冻结，原稿归档保持原样。实际图片由 Agent 编排工具调用，CLI 不负责提交、轮询或自动重试。当前单图数量与资产确认仍是该校验器的现行约束。场景多候选使用项目内独立的逐张候选计划与结果记录，保留项目/来源绑定、资产与候选 ID、视角、Prompt 版本与哈希、规格、输入参考、任务及输出和确认状态；不改旧单图清单，不把其校验结果当作候选计划已通过校验。若后续要将多候选纳入该清单，须先同步扩展合同与校验，不能伪造现有状态绕过。
+完整内容见[资产先行与图片检查](visual-assets.md#本地文件与执行入口)。
 
 ## 1. 读取 Excel 与本次要求
 
-输入归档的唯一规则与列映射命令见[输入归档](input-archive.md)，ingest 阶段自动加载。
+完整内容见[全片规划、时长与自然正文](visual-planning.md#1-读取-excel-与本次要求)。
 
 ## 2. 全片规划先于单镜措辞
 
-新方案围绕十一个画面维度规划：主体与关键瞬间、外貌与服装、姿态与动作、表情与视线、人物与道具关系、景别机位与取景、摄影约束（焦距、光圈与对焦）、构图与空间层次、场景布景与材质、光影与色调、跨镜画面连续性。维度是覆盖与检查工具，不要求正文依次输出字段，不增加与画面无关的策略分析。
-
-先建立稳定角色、场景和道具 ID。登记本次已知外貌、服装、空间与状态，分别记录原稿事实和导演设计。未被用户锁定的虚构造型、布景、表演与拍法可在已授权的自动创作范围内统一设计；身份、实际产品、真实地点或不可推断的信息不伪装成事实。没有参考就保留空关联，不把资产 ID 当作图片。
-
-按[人物资产与可选细节](character-prompts.md)另交人物基础 Prompt；每个必要场景先形成[美术与陈设共用设定](scene-art-direction.md)，再组织独立资产 Prompt。三视图与道具边界按第0节执行。已有确定采用的实际角色图直接复用。痣、雀斑等主观新增细节只放在独立的未启用编辑稿里，不混入基础图或任何分镜。原稿已确定的细节继续保留。人物文件单独导出时不改原分镜及用户评分，不需面孔或明确不允许设计面孔的角色不擅补。
-
-逐镜记录：前镜结束状态、本镜进入状态、本镜结束状态、切换依据。人物不能无故换装、换手或越过轴线；机位改变不能自动镜像世界布局。视线、手部、道具和遮挡需能同时成立。场景切换要在原稿或明确设计中有依据；不能通过擅加剧情解释本来不存在的连接。
-
-每个实际制作镜头对应一个有意义的瞬间。原表一行含多个连续事件时，拆成带同一来源 ID 的制作子镜，时长分配给子镜；合镜保留多个来源 ID。定格复用填写 `reuseOf` 指向更早镜头，Prompt 与被复用镜一致，字幕和后期变化写入动作编排。不可把多段先后动作要求挤进一张静帧。
+完整内容见[全片规划、时长与自然正文](visual-planning.md#2-全片规划先于单镜措辞)。
 
 ## 3. 时长随任务变化
 
-优先级为：用户当前明确的目标、上限或区间 → 本次 Excel 的有效原时长 → 依据动作及画面停留估算。90 秒不是默认值或最低标准。
-
-- `exact`：总和满足指定秒数；`max`：总和不超过上限；`range`：总和落在指定区间；`estimate`：依据当前画面合理估算。
-- 用户要求与原表不一致时，保留原时长作为来源，调整制作时长、冗余停留、动作编排与必要拆并，记录理由并继续工作。
-- 不删除必需人物、动作、道具、关键画面事实来凑秒数，不用极端加速掩盖无法看清的事件。让允许并行的动作并行、压缩重复建立镜、调整镜头切点，满足时间约束。
-- 校验发现总和超限时，Agent 根据上述方法修正本次编排后继续导出；不能把数字冲突直接变成让用户接手的终止点。修复具体错误不等于开启评分驱动的多轮创作。
+完整内容见[全片规划、时长与自然正文](visual-planning.md#3-时长随任务变化)。
 
 ## 4. 自然正文与一次核对
 
-先填人物、道具和关系结构与十一维内容，再由 Agent 写 `prompt.text`。先说明视觉重点，再集中描述每个人的姿态、表情及持物；无确定参考时交代必要外貌、服装和场景，有参考时按下节仅写引用和变化。补足本镜必要的空间、镜头、摄影约束和光影。多人镜使用能对应具体图片或可见特征的人物称呼，明确各自关系，不用有歧义的“他/她/对方”。静帧正文不写内心、旁白或连续动作。
-
-允许自然分段，复杂多人镜可以按人物分段；不把去掉标题的字段直接串联，不靠形容词制造深度。人物与场景设计、静帧及视频 Prompt 均不设创作字数上限，优先保证画面质量，删除重复而不删必要关系。角色/道具 ID 与地理方位只作内部依据；只有机位和布局足够明确才换算为画面左右、前后和景层。清晰范围须涵盖本镜必须读清的人和物，不靠一个光圈数字保证多人清晰。
-
-使用随包导演方法与 Humanizer，按[四步表达核对](prompt-language.md#四步表达核对)完成一次语言处理：先诊断不改写，再删水分、改骨架，最后从编辑角度反向查残并对照原有约束。核对是否遗漏或新增事实，人物数量、服装、动作、道具归属是否准确，视线及空间是否矛盾，句子是否连贯。四步中的歧义、缺口、冲突分类及五类关系检查以[表达规则](prompt-language.md#四步表达核对)为准；prompt 与 review 阶段均加载同一文件，不在此维护副本。四步不增加改稿轮次或用户确认环节；具体错误按现有上限局部修复，硬校验与独立语义核对分别记录。纠正本稿发现的问题后冻结，再按 [评分规则](visual-rubric.md) 做只读评审。评分不足时显示原因和重写建议，不自动改稿到高分。
-
-画幅、分辨率等独立参数保存于 `spec`，不在正文或对用户的独立参数表中重复输出。摄影创作中的焦距、光圈、焦点按下节明确写入，不与隐藏的接口规格混淆。尚无已确认参考时按从零生图写法创作；可用参考来源及生成阶段按第0节执行。参考标记按实际目标接口另行处理，不能由自然化环节丢失绑定。
+完整内容见[全片规划、时长与自然正文](visual-planning.md#4-自然正文与一次核对)。
 
 ### 摄影约束：焦距、光圈与对焦
 
-已集中到[表达规则](prompt-language.md#摄影约束焦距光圈与对焦)，规划摄影与编写正文时读取。
+完整内容见[全片规划、时长与自然正文](visual-planning.md#摄影约束焦距光圈与对焦)。
 
 ### 人物指代：内部身份与模型正文
 
-实际图片与内部身份的对应按[人物指代规则](prompt-language.md#人物指代内部身份与模型正文)。
+完整内容见[全片规划、时长与自然正文](visual-planning.md#人物指代内部身份与模型正文)。
 
 ### 已有确定参考图时
 
-有图、无图及混合参考的写法统一按[参考规则](prompt-language.md#已有确定参考图时)执行。以上标题保留用于兼容旧链接，不维护副本。
+完整内容见[全片规划、时长与自然正文](visual-planning.md#已有确定参考图时)。
 
 ## 5. 创作数据合同
 
-数据版本仍为 `schemaVersion: 1`、`mode: "visual-excel-v1"`；新方案必须显式记录 `rubricVersion: "visual-v2"`，含十一维。既有方案未记录 `rubricVersion` 时按 `visual-v1` 十维兼容，正文、指纹、人评和分数不自动迁移。所列维度均须有文本；确实不适用时说明画面原因，不编造人物来填满。评分可用 `null` 表示不适用。
-
-```text
-projectId, title, sourceSha256, rubricVersion: "visual-v2"
-spec:
-  aspectRatio, resolution, style
-  duration: {mode: estimate|exact|max|range, seconds?, min?, max?, basis}
-productionInventory:
-  characters: [{id, name, description, basis}]
-  locations: [{id, name, description, basis}]
-props: [{id, name, description}]
-references: [] 或下列实际参考记录
-  用户附件: {id, purpose, userProvided: true}
-  已确认生成图: {id, origin: "generated-confirmed", assetId, generationTaskId, path, sha256, purpose, userProvided: false}
-designNotes: [本次设计依据及时长/拆并调整]
-shots: [{
-  id, sourceShotIds: [归档中的镜头ID], locationId, seconds,
-  dimensions: {
-    moment, appearance, pose, expression, relations,
-    camera, optics, composition, scene, lighting, continuity
-  },
-  shotSchema: {referenceIds, subjects, props, relations},
-  transition: {fromShotIds: [更早镜头ID], entry, exit, cut},
-  motion: 动作及剪辑编排文本,
-  reuseOf: null 或更早镜头ID,
-  prompt: {text, sourceHash, textHash},
-  review: 评分对象
-}]
-calibration: [{id, shotId, label, text, sourceHash, textHash, review}]
-```
-
-`motion` 是镜头动作与衔接记录，不是本轮另交一套视频生成 Prompt。`shotSchema` 复用 [人物、道具与关系契约](data-contract.md#单镜人物道具与关系)：人物 `assetId/referenceIds`，道具 `id/name/state/position/holderAssetIds/referenceIds`，关系 `id/type/subjectIds/propIds/description`。人物字段可记录 appearance/clothing/position/orientation/pose/hands/gaze/expression/visibleParts；关系类型是 gaze/contact/occlusion/sameFrame。所有持有者都必须在本镜入镜表中。`sameFrame` 必须关联至少两个本镜入镜人物，不能用于一个人物与若干道具的同框；单人物与道具的实际接触或注视使用 `contact` 或 `gaze`，仅说明同框范围时写入构图或正文。
-
-生成结果与用户确认独立保存在项目的 `generation-manifest.json`，不能改写原件归档伪造来源。只有对应任务实际完成、文件可读且用户确认采用后，才将生成图登记为 `generated-confirmed` 并关联正确资产；正文引用变化须形成新版本，旧正文及其评分保留。路径、文件哈希与任务身份必须和实际输出一致，不能仅凭文件存在把图片标为已确认。
-
-`sourceHash` 绑定本镜对应原文、规格、资产、维度内容、Shot Schema 和前后衔接；显式评分版本也进入指纹。`textHash` 单独绑定正文。由 `seal` 计算，Agent 不用伪造或手填哈希。评分对象的 `rubricVersion` 须与计划一致，`promptHash` 须对应其精确正文。
+完整内容见[既有 v1 数据与人工评分导入](visual-legacy.md#5-创作数据合同)。
 
 ## 6. 冻结、导出与评分导入
 
-```text
-node "<skill>/scripts/visual.mjs" seal "<project>" "<plan.json>"
-node "<skill>/scripts/visual.mjs" validate "<project>"
-node "<skill>/scripts/visual.mjs" export "<project>"
-node "<skill>/scripts/visual.mjs" feedback "<project>" "<ratings.xlsx>"
-```
-
-`seal` 只把正文中的 CRLF 规范为 LF 后计算哈希，不改字句或语义，也不覆盖已有 `visual-plan.json`。用户授权修订时新建版本目录，保留原件和前版；正常导出只校验，不刷新已过期指纹。修订正文或来源后不能沿用旧评分。校验通过只证明结构、绑定与计算一致，不能代替 Agent 的语义核对或实际图像验收。
-
-v1 数据和评分按原合同读取，重新导出的正式 Excel 也使用[三表脚本规范](#正式-excel-与后台日志)。分数、证据、来源和检查过程只进入后台，不新建评分辅助表或隐藏表；原历史导出及真实人评保留。用户明确要求校准时才用 `export-calibration` 另导独立样本，用户分数/原因为可填区域，原稿、正文、样本 ID 和哈希保持冻结。
-
-独立人工校准导出继续检查既有文件；任何人工评分或原因已填写时拒绝覆盖，0 分也视为已填写。保留原文件，先导入或另存用户填写结果，再在新版本中继续；不得清空输入区来绕过保护。普通正式脚本的 `export` 则按上方固定文件规则更新文案，两者不能混用。
-
-人工评分仅接收用户真实填写的 0–100 数字，0 分不是空值。未知/重复 ID、公式、被改过的正文或背景均拒绝导入，避免把评分绑定错对象；明确报告原因并保留用户文件。导入保存独立、可追溯的反馈记录，不覆盖 Agent 分数或自动重写规则。标准提炼见 [人工评分与版本化标准](visual-rubric.md#人工评分与版本化标准)。
-
-本模式不改旧项目、旧网页和旧导演测评材料。交付时区分已完成的文本/软件检查与未做的媒体生成，不以自评高分宣称 one-shot 达标。
+完整内容见[既有 v1 数据与人工评分导入](visual-legacy.md#6-冻结导出与评分导入)。

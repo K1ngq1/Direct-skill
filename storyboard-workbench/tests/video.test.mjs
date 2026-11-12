@@ -8,6 +8,7 @@ import ExcelJS from '../scripts/vendor/exceljs.cjs';
 import { sealPlan, promptHash, dimensionsFor, exportVisualProject } from '../scripts/visual.mjs';
 import { contract } from '../scripts/visual_v2.mjs';
 import { validateVideoWorkflow, sealVideoWorkflow, readVideoWorkflow, finalizeVideoWorkflow, importVideoFeedback } from '../scripts/video.mjs';
+import { receiptBridge } from '../scripts/libtv_assets.mjs';
 
 const save = (filename, value) => fs.writeFileSync(filename, JSON.stringify(value, null, 2) + '\n', 'utf8');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF7sAAAAASUVORK5CYII=', 'base64');
@@ -177,6 +178,10 @@ test('finalize seals and delivers once, and reports saved state when Excel expor
   assert.equal(first.acceptance.status, 'passed', JSON.stringify(first.acceptance));
   assert.equal(first.stateSaved, true); assert.equal(first.exportsUpdated, true); assert.equal(first.status, 'delivered');
   const workbook = first.files.find(file => file.endsWith('.xlsx')), bytes = fs.readFileSync(workbook);
+  const recovered = await receiptBridge({ operation: 'canvas-export', directory, projectDirectory: directory, workflowFile: first.file });
+  assert.equal(recovered.acceptance, 'passed');
+  assert.deepEqual(fs.readFileSync(workbook), bytes);
+  await assert.rejects(finalizeVideoWorkflow(directory, { ...workflow, title: '同版本不同内容' }, { resumeIdentical: true }), /冲突/);
   const next = structuredClone(workflow); next.revision++;
   next.shotPrompts = [{ shotId: 'S07a', text: '人物保持站立，目光停在桌面。'.repeat(800), basis: '本次软件样例', references: [] }];
   const failed = await finalizeVideoWorkflow(directory, next); track(failed.file);

@@ -114,6 +114,28 @@ test('returned receipt with a failed local finalizer halts once and resumes savi
   assert.equal(calls, 2);
 });
 
+test('the stream releases a dependent image in the same run after a saved finalizer loses its reply', async () => {
+  const f = fixture(['C', 'R'], { R: ['C'] });
+  f.tasks.forEach(task => f.publish(task.id));
+  await f.init(); await f.close();
+  const submitted = [], checked = [];
+  const result = await runCodexImageStream({ ...f.options,
+    bridge: async request => {
+      const saved = await bridge(request);
+      if (request.operation === 'finalize' && request.args[0] === 'C') throw new Error('saved response lost');
+      if (request.operation === 'reconcileFinalization') checked.push(request.args[0]);
+      return saved;
+    },
+    generateImage: async request => { submitted.push(request.prompt.split(' ')[0]); return { path: f.image }; }
+  });
+  assert.deepEqual(checked, ['C']);
+  assert.deepEqual(submitted, ['C', 'R']);
+  assert.equal(result.statuses.R.status, 'succeeded');
+  const [check] = result.batches.flatMap(batch => batch.finalizationChecks ?? []);
+  assert.equal(check.id, 'C');
+  assert.ok(check.stopToResumeMs >= 0);
+});
+
 test('new recipes and adoption are discovered while the host waits, recording first usable shot', async () => {
   const f = fixture(['S']);
   const adopted = path.join(f.root, 'shot-adoption.json'); f.tasks[0].adoption = { path: adopted, pointer: '' };
@@ -144,4 +166,103 @@ test('context pointers isolate an unrelated scene edit and invalidate the change
   await runCodexImageStream(options); save(context, { bedroom: 'bedroom', beach: 'changed beach' });
   const result = await runCodexImageStream({ ...options, generateImage: () => assert.fail('frozen tasks must not regenerate') });
   assert.equal(result.statuses.C.status, 'succeeded'); assert.equal(result.statuses.B.status, 'stale');
+});
+
+test('next generation starts during prior finalization and an old completion never releases its slot', { timeout: 5000 }, async () => {
+  const f = fixture(['C', 'R', 'L']); f.tasks.forEach(t => f.publish(t.id)); await f.init(); await f.close();
+  let release, finalizing = false, generation = 0, peak = 0;
+  const barrier = new Promise(resolve => { release = resolve; }), order = [];
+  const run = new Function(codexImageHostSource() + '\nreturn runCodexImageStream;')();
+  const result = await run({ ...f.options,
+    bridge: async request => {
+      if (request.operation === 'finalize' && request.args[0] === 'C') { finalizing = true; await barrier; }
+      return bridge(request);
+    },
+    generateImage: async request => {
+      const id = request.prompt.split(' ')[0]; order.push(id); peak = Math.max(peak, ++generation);
+      if (id === 'R') {
+        assert.equal(finalizing, true);
+        assert.equal(fs.existsSync(path.join(f.root, 'C', 'results', 'C.json')), false);
+        release();
+        await new Promise(resolve => setTimeout(resolve, 40));
+        assert.deepEqual(order, ['C', 'R']);
+      }
+      generation--; return { path: f.image };
+    }
+  });
+  assert.equal(peak, 1); assert.deepEqual(order, ['C', 'R', 'L']);
+  assert.equal(result.statuses.C.status, 'succeeded'); assert.equal(result.statuses.L.status, 'succeeded');
+});
+
+test('slow disk backpressure caps live microbatches at four with one finalizer', { timeout: 5000 }, async () => {
+  const f = fixture(['A', 'B', 'C', 'D', 'E', 'F']); f.tasks.forEach(t => f.publish(t.id)); await f.init(); await f.close();
+  let release, diskActive = 0, peakDisk = 0;
+  const barrier = new Promise(resolve => { release = resolve; }), calls = [];
+  const result = await runCodexImageStream({ ...f.options,
+    bridge: async request => {
+      if (request.operation !== 'finalize') return bridge(request);
+      peakDisk = Math.max(peakDisk, ++diskActive);
+      try { if (request.args[0] === 'A') await barrier; return await bridge(request); }
+      finally { diskActive--; }
+    },
+    generateImage: async request => { calls.push(request.prompt.split(' ')[0]); return { path: f.image }; },
+    displayImage: () => {
+      if (calls.length === 4) setTimeout(() => {
+        assert.equal(calls.length, 4); release();
+      }, 30);
+    }
+  });
+  assert.equal(peakDisk, 1); assert.equal(calls.length, 6); assert.equal(result.batches.length, 6);
+});
+
+test('a late disk failure drains the already submitted peer and blocks further tools', { timeout: 5000 }, async () => {
+  const f = fixture(['C', 'R', 'L']); f.tasks.forEach(t => f.publish(t.id)); await f.init(); await f.close();
+  let release;
+  const barrier = new Promise(resolve => { release = resolve; }), calls = [];
+  const result = await runCodexImageStream({ ...f.options,
+    bridge: async request => {
+      if (request.operation === 'finalize' && request.args[0] === 'C') { await barrier; throw new Error('disk failure'); }
+      return bridge(request);
+    },
+    generateImage: async request => {
+      const id = request.prompt.split(' ')[0]; calls.push(id);
+      if (id === 'R') { release(); await new Promise(resolve => setTimeout(resolve, 20)); }
+      return { path: f.image };
+    }
+  });
+  assert.ok(result.halted); assert.deepEqual(calls, ['C', 'R']);
+  assert.equal(result.statuses.C.status, 'returned'); assert.equal(result.statuses.R.status, 'succeeded');
+});
+
+test('a prompt published during disk finalization starts without waiting for the disk', { timeout: 5000 }, async () => {
+  const f = fixture(['C', 'R']); f.publish('C'); await f.init();
+  let release;
+  const barrier = new Promise(resolve => { release = resolve; }), calls = [];
+  const result = await runCodexImageStream({ ...f.options,
+    bridge: async request => {
+      if (request.operation === 'finalize' && request.args[0] === 'C') {
+        setTimeout(() => { f.publish('R'); void f.close(); }, 30);
+        await barrier;
+      }
+      return bridge(request);
+    },
+    generateImage: async request => {
+      const id = request.prompt.split(' ')[0]; calls.push(id);
+      if (id === 'R') {
+        assert.equal(fs.existsSync(path.join(f.root, 'C', 'results', 'C.json')), false); release();
+      }
+      return { path: f.image };
+    }
+  });
+  assert.deepEqual(calls, ['C', 'R']); assert.equal(result.statuses.R.status, 'succeeded');
+});
+
+test('failed receipt persistence never releases the generation slot for a peer', async () => {
+  const f = fixture(['C', 'R']); f.tasks.forEach(t => f.publish(t.id)); await f.init(); await f.close();
+  let calls = 0;
+  const result = await runCodexImageStream({ ...f.options,
+    bridge: request => { if (request.operation === 'capture') throw new Error('receipt persistence failed'); return bridge(request); },
+    generateImage: async () => { calls++; return { path: f.image }; }
+  });
+  assert.equal(calls, 1); assert.ok(result.halted); assert.equal(result.unknown, true);
 });

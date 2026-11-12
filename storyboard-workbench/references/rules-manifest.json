@@ -1,18 +1,16 @@
 {
   "schemaVersion": 1,
   "rulesVersion": "storyboard-rules-v1",
-  "core": [
-    "SKILL.md"
-  ],
+  "core": ["SKILL.md"],
   "stages": {
     "ingest": ["references/input-archive.md"],
-    "plan": ["references/directing.md", "references/character-prompts.md", "references/scene-art-direction.md", "schemas/visual-plan-v2.json"],
-    "prompt": ["references/prompt-language.md", "references/humanizer-zh/SKILL.md"],
-    "review": ["references/prompt-language.md", "references/visual-rubric.md", "schemas/visual-plan-v2.json"],
-    "export": ["references/visual-workflow.md", "schemas/visual-plan-v2.json"],
-    "legacy": ["references/legacy-workbench.md", "references/data-contract.md", "references/production-framework.md", "references/story-planning.md"]
+    "plan": ["references/directing.md","references/character-prompts.md","references/scene-art-direction.md","schemas/visual-plan-v2.json"],
+    "prompt": ["references/prompt-language.md"],
+    "review": ["references/prompt-language.md","references/visual-rubric.md","schemas/visual-plan-v2.json"],
+    "export": ["references/visual-seal.md","references/excel-delivery.md","schemas/visual-plan-v2.json"],
+    "legacy": ["references/legacy-workbench.md","references/data-contract.md","references/production-framework.md","references/story-planning.md","references/visual-legacy.md"]
   },
-  "onDemand": ["references/video-workflow.md", "references/media-execution.md", "references/single-run.md"],
+  "onDemand": ["references/video-workflow.md","references/media-execution.md","references/single-run.md","references/humanizer-zh/SKILL.md","references/visual-planning.md","references/visual-assets.md","references/media-context.md"],
   "scripts": [
     "scripts/runtime.mjs",
     "scripts/import_excel.py",
@@ -28,6 +26,10 @@
     "scripts/process_lock.mjs",
     "scripts/local_image.mjs",
     "scripts/libtv_assets.mjs",
+    "scripts/libtv_canvas_production.mjs",
+    "scripts/libtv_canvas_inputs.mjs",
+    "scripts/libtv_canvas_bridge.mjs",
+    "scripts/libtv_canvas_readback.mjs",
     "scripts/libtv_upload.mjs",
     "scripts/libtv_generation.mjs",
     "scripts/libtv_generation_store.mjs",
@@ -39,5 +41,22 @@
     "scripts/patch_excel.py",
     "scripts/export_excel.mjs",
     "scripts/vendor/exceljs.cjs"
-  ]
+  ],
+  "tasks": {
+    "seal": ["references/visual-v2-contract.md","references/visual-seal.md","schemas/visual-plan-v2.json"],
+    "excel-update": ["references/excel-delivery.md","references/excel-update.md"],
+    "revision": ["references/visual-v2-contract.md","references/visual-revision.md"],
+    "image-batch": ["references/media-execution.md","references/media-image-batch.md"],
+    "image-recovery": ["references/media-execution.md","references/media-image-recovery.md"],
+    "canvas": ["references/media-execution.md","references/media-canvas-session.md"],
+    "upload": ["references/media-execution.md","references/media-canvas-session.md","references/media-transfer.md"],
+    "canvas-production": ["references/media-execution.md","references/media-canvas-production.md","references/media-canvas-session.md","references/media-transfer.md"],
+    "canvas-recovery": ["references/media-execution.md","references/media-canvas-recovery.md"],
+    "libtv-generation": ["references/media-execution.md","references/media-libtv-generation.md"],
+    "libtv-recovery": ["references/media-execution.md","references/media-libtv-recovery.md"],
+    "assets": ["references/media-execution.md","references/media-assets.md","references/media-transfer.md"],
+    "media-delivery": ["references/media-execution.md","references/media-delivery.md"],
+    "media-audit": ["references/media-execution.md","references/media-observability.md"],
+    "humanizer": ["references/humanizer-zh/SKILL.md"]
+  }
 }

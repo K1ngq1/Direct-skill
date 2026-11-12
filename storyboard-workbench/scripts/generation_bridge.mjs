@@ -102,17 +102,21 @@ export async function bridge(input) {
   }
   if (operation === 'summarize') {
     const started = performance.now();
-    const states = store.snapshot();
-    const results = plan.jobs.map(job => states[job.id] ?? { id: job.id, status: 'paused' });
+    const report = args[0] ?? { deliveryAllowed: true };
+    const unresolved = new Map((report.finalizationChecks ?? []).filter(check => check.outcome === 'unresolved').map(check => [check.id, check.blockedBy]));
+    const results = plan.jobs.map(job => {
+      if (unresolved.has(job.id)) return { id: job.id, status: 'unknown', stage: 'finalize', error: unresolved.get(job.id) };
+      const { request, resolvedReferences, ...state } = store.load(job.id) ?? { id: job.id, status: 'paused' };
+      return state;
+    });
     const toolWaitMs = results.reduce((sum, item) => sum + (item.toolReturnedAt && item.callStartedAt ? Math.max(0, Date.parse(item.toolReturnedAt) - Date.parse(item.callStartedAt)) : 0), 0);
     const receiptSaveMs = results.reduce((sum, item) => sum + (item.finalizeMs ?? 0), 0);
-    const report = args[0] ?? { deliveryAllowed: true };
     const summary = store.summarize(results, { ...report, timing: { preparationMs: prepared?.preparationMs ?? null, toolWaitMs, receiptSaveMs,
       returnToCaptureMs: report.returnToCaptureMs ?? [], nextSubmissionAfterCaptureMs: report.nextSubmissionAfterCaptureMs ?? [],
       batchWallMs: report.totalMs ?? null, source: 'host-events; excludes-user-wait; not-gpu-time' } });
-    return { ...summary, summaryMs: performance.now() - started };
+    return { ...summary, ...(report.finalizationChecks ? { finalizationChecks: report.finalizationChecks } : {}), summaryMs: performance.now() - started };
   }
-  if (!['snapshot', 'readControl', 'setControl', 'acknowledgeControl', 'prepare', 'capture', 'finalize', 'load', 'inspectFinalization', 'recoverFinalization'].includes(operation)) fail('未知存储操作');
+  if (!['snapshot', 'readControl', 'setControl', 'acknowledgeControl', 'prepare', 'capture', 'finalize', 'reconcileFinalization', 'load', 'inspectFinalization', 'recoverFinalization'].includes(operation)) fail('未知存储操作');
   return store[operation](...args);
 }
 

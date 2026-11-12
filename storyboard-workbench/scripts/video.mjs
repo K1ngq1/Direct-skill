@@ -169,8 +169,18 @@ export function readVideoWorkflow(directory, filename) {
 
 const summary = (workflow, pendingImageIds) => ({ revision: workflow.revision, counts: { images: workflow.images.length, videoShots: workflow.videoShots.length, timeline: workflow.timeline.length, results: workflow.results.length }, totalSeconds: workflow.timeline.reduce((sum, row) => sum + row.seconds, 0), pendingImageIds });
 
-export async function finalizeVideoWorkflow(directory, input) {
-  const sealed = sealVideoWorkflow(directory, input);
+export async function finalizeVideoWorkflow(directory, input, { resumeIdentical = false } = {}) {
+  let sealed;
+  if (resumeIdentical && Number.isSafeInteger(input.revision) && input.revision > 0) {
+    const file = path.join(directory, 'video-workflow', revisionName(input.revision));
+    if (fs.existsSync(file)) {
+      const workflow = read(insideFile(directory, file));
+      if (!isDeepStrictEqual(input, workflow)) fail('已封存的视频规划版本与本次输入冲突');
+      const { pendingImageIds } = validateVideoWorkflow(directory, workflow);
+      sealed = { file, workflow, pendingImageIds };
+    }
+  }
+  sealed ??= sealVideoWorkflow(directory, input);
   const result = { status: 'sealed', stateSaved: true, exportsUpdated: false, file: sealed.file, ...summary(sealed.workflow, sealed.pendingImageIds) };
   try {
     const { exportVisualProject } = await import('./visual.mjs');

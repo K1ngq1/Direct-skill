@@ -96,6 +96,55 @@ test('on-demand rules stay out of stage bodies but remain validated and fingerpr
   assert.throws(() => loadRules({ skillRoot: root }), error => error.issue.code === 'RULE_MANIFEST_INVALID');
 });
 
+test('task routes load only their operation and remain part of the canonical fingerprint', t => {
+  const { root, manifest, save } = fixture(t);
+  manifest.tasks = { canvas: ['plan.md'] }; save();
+  assert.ok(loadRules({ skillRoot: root, stage: 'canvas' }).files.some(file => file.path === 'plan.md'));
+  assert.ok(!loadRules({ skillRoot: root, stage: 'prompt' }).files.some(file => file.path === 'plan.md'));
+  const before = loadRuleSnapshot({ skillRoot: root });
+  fs.appendFileSync(path.join(root, 'plan.md'), '操作约束变更', 'utf8');
+  assert.notEqual(loadRuleSnapshot({ skillRoot: root }).rulesHash, before.rulesHash);
+  manifest.tasks = { plan: ['plan.md'] }; save();
+  assert.throws(() => loadRules({ skillRoot: root }), error => error.issue.code === 'RULE_MANIFEST_INVALID');
+  manifest.tasks = { canvas: ['../outside.md'] }; save();
+  assert.throws(() => loadRules({ skillRoot: root, stage: 'canvas' }), error => error.issue.code === 'LOCAL_PATH_INVALID');
+});
+
+test('delta delivery preserves fingerprints and emits changed rules and adapters', t => {
+  const { root } = fixture(t);
+  const first = loadRuntimeRules({ skillRoot: root, stage: 'plan', adapter: 'codex' });
+  const reused = loadRuntimeRules({ skillRoot: root, stage: 'plan', adapter: 'codex', since: first });
+  assert.deepEqual(reused.snapshot, first.snapshot);
+  assert.equal(reused.files.length, 0);
+  assert.equal(reused.adaptation.files.length, 0);
+  assert.equal(reused.ruleDelivery.reused.length, first.files.length + first.adaptation.files.length);
+  fs.appendFileSync(path.join(root, 'plan.md'), '修订约束', 'utf8');
+  fs.appendFileSync(path.join(root, 'adapters/codex.md'), '宿主变更', 'utf8');
+  const changed = loadRuntimeRules({ skillRoot: root, stage: 'plan', adapter: 'codex', since: first });
+  assert.deepEqual(changed.files.map(file => file.path), ['plan.md']);
+  assert.deepEqual(changed.adaptation.files.map(file => file.path), ['adapters/codex.md']);
+  assert.notEqual(changed.snapshot.rulesHash, first.snapshot.rulesHash);
+  assert.throws(() => loadRuntimeRules({ skillRoot: root, since: {} }), error => error.issue.code === 'RULE_SINCE_INVALID');
+  assert.throws(() => loadRuntimeRules({ skillRoot: root, since: first, ruleChunkChars: 1024 }), error => error.issue.code === 'RULE_SINCE_INVALID');
+});
+
+test('production routes retain required contracts while excluding unrelated operations', () => {
+  const names = stage => loadRules({ stage }).files.map(file => file.path);
+  const canvas = names('canvas');
+  assert.ok(canvas.includes('references/media-canvas-session.md'));
+  assert.ok(!canvas.some(name => /media-image-batch|media-libtv-generation|humanizer-zh|visual-legacy/.test(name)));
+  const exports = names('export');
+  assert.ok(exports.includes('references/excel-delivery.md'));
+  assert.ok(exports.includes('references/visual-seal.md'));
+  assert.ok(!exports.includes('references/excel-update.md'));
+  assert.ok(names('excel-update').includes('references/excel-update.md'));
+  assert.ok(names('seal').includes('references/visual-v2-contract.md'));
+  const all = names('all');
+  assert.ok(all.includes('references/humanizer-zh/SKILL.md'));
+  assert.ok(all.includes('references/media-canvas-recovery.md'));
+  assert.ok(!all.includes('references/visual-legacy.md'));
+});
+
 test('real rules include the v2 contract and CLI records cannot overwrite existing files', t => {
   const rules = loadRules();
   assert.equal(rules.snapshot.rulesVersion, 'storyboard-rules-v1');
@@ -108,7 +157,14 @@ test('real rules include the v2 contract and CLI records cannot overwrite existi
   const result = invoke(); assert.equal(result.status, 0, result.stderr);
   const before = fs.readFileSync(output), record = JSON.parse(before);
   assert.deepEqual(record.canonicalSnapshot, rules.snapshot);
-  assert.ok(record.files.some(file => file.path === 'references/humanizer-zh/SKILL.md' && file.text));
+  assert.ok(record.files.some(file => file.path === 'references/prompt-language.md' && file.text));
+  assert.ok(!record.files.some(file => file.path === 'references/humanizer-zh/SKILL.md'));
+  const delta = spawnSync(process.execPath, [cli, 'rules', 'prompt', '--since', output], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  assert.equal(delta.status, 0, delta.stderr);
+  const deltaRecord = JSON.parse(delta.stdout);
+  assert.equal(deltaRecord.files.length, 0);
+  assert.equal(deltaRecord.ruleDelivery.mode, 'delta');
+  assert.deepEqual(deltaRecord.canonicalSnapshot, rules.snapshot);
   assert.equal(invoke().status, 1);
   assert.deepEqual(fs.readFileSync(output), before);
 });

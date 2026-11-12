@@ -69,11 +69,11 @@ async function putPart(directory, part, bytes, timeoutSeconds) {
 }
 
 // shortcut: image-sized buffers preserve exactly the hashed bytes; use immutable streamed snapshots for large video uploads.
-export async function transferLibTVFile(directory, item, ticket, { allowUpload = false, timeoutSeconds = 90 } = {}) {
+export async function transferLibTVFile(directory, item, ticket, { allowUpload = false, timeoutSeconds = 90, recoverDnsFailure = false } = {}) {
   if (!path.isAbsolute(directory ?? '') || !/^[A-Za-z0-9_-]{1,80}$/.test(item?.id ?? '') || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(item.id)
     || !path.isAbsolute(item.path ?? '') || typeof item.projectId !== 'string' || !item.projectId.trim()
     || !Number.isSafeInteger(item.size) || item.size <= 0 || !/^[a-f0-9]{64}$/.test(item.sha256 ?? '')
-    || typeof allowUpload !== 'boolean' || !Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3600) throw new Error('LibTV 上传文件身份、授权或超时无效');
+    || typeof allowUpload !== 'boolean' || typeof recoverDnsFailure !== 'boolean' || !Number.isSafeInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 3600) throw new Error('LibTV 上传文件身份、授权或超时无效');
   const parts = partsFor(ticket, item.size);
   const bytes = await fs.promises.readFile(item.path);
   if (bytes.length !== item.size || hash(bytes) !== item.sha256 || (item.sha1 !== undefined && crypto.createHash('sha1').update(bytes).digest('hex') !== item.sha1)) throw new Error('LibTV 冻结文件长度或哈希已变化');
@@ -97,12 +97,17 @@ export async function transferLibTVFile(directory, item, ticket, { allowUpload =
       if (completed.state !== 'completed' || !Number.isInteger(proof?.status) || proof.status < 200 || proof.status >= 300 || proof.bytes !== item.size || proof.sha256 !== item.sha256) throw new Error('LibTV 上传完成证明无效');
       return { ...proof, reused: true };
     }
-    if (await read('curl_submitted')) throw new Error('LibTV 原 PUT 已提交但无完成证明；先核对原进程和服务端，不自动重传');
+    const submitted = await read('curl_submitted');
+    if (submitted) {
+      const failure = await read('curl_error');
+      // A single-part curl exit 6 cannot send HTTP; all other incomplete PUTs remain blocked.
+      if (!recoverDnsFailure || parts.length !== 1 || failure?.state !== 'unknown' || !/（exit=6, HTTP=0）/.test(failure.error ?? '')) throw new Error('LibTV 原 PUT 已提交但无完成证明；先核对原进程和服务端，不自动重传');
+    } else if (recoverDnsFailure) throw new Error('DNS恢复须有同一原票据的单片解析失败证据');
     if (!allowUpload) throw new Error('LibTV 字节上传未获本次授权；仅允许复用完成证明');
     await checkLibTVCurl();
     const startedAt = new Date().toISOString(), start = performance.now();
     const base = { schemaVersion: 1, identity, startedAt };
-    await store.writeReceipt(item, 'curl_submitted', { ...base, state: 'submitted' }, { exclusive: true });
+    await store.writeReceipt(item, submitted ? 'curl_dns_recovery' : 'curl_submitted', { ...base, state: 'submitted' }, { exclusive: true });
     let status, transferMs = 0;
     try {
       for (const part of parts) {
@@ -111,13 +116,27 @@ export async function transferLibTVFile(directory, item, ticket, { allowUpload =
         status = result.status; transferMs += result.transferMs;
       }
     } catch (error) {
-      await store.writeReceipt(item, 'curl_error', { ...base, state: 'unknown', error: error.message, finishedAt: new Date().toISOString() }, { exclusive: true });
+      await store.writeReceipt(item, submitted ? 'curl_dns_recovery.error' : 'curl_error', { ...base, state: 'unknown', error: error.message, finishedAt: new Date().toISOString() }, { exclusive: true });
       throw error;
     }
     const proof = { status, bytes: bytes.length, sha256: item.sha256, transport: 'native-curl', transferMs, wallMs: performance.now() - start };
     const returned = { ...base, state: 'completed', proof, finishedAt: new Date().toISOString() };
     try { await store.writeReceipt(item, 'curl_completed', returned, { exclusive: true }); }
-    catch { throw Object.assign(new Error('curl 已返回成功，但完成证明保存失败；仅恢复 returned 回执，不重新 PUT'), { returned }); }
+    catch {
+      try {
+        lock.assertOwner(owner);
+        const saved = await read('curl_completed');
+        if (!saved) await store.writeReceipt(item, 'curl_completed', returned, { exclusive: true });
+        else {
+          if (JSON.stringify(saved) !== JSON.stringify(returned)) throw new Error('完成证明与原返回结果冲突');
+          // The first write may have left the correct bytes but failed to flush them.
+          const fd = fs.openSync(path.join(receiptDirectory, item.id + '.curl_completed.json'), 'r+');
+          try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
+      } catch (error) {
+        throw Object.assign(new Error('curl 已返回成功，完成证明补存失败：' + error.message), { returned, storageFailed: true });
+      }
+    }
     return { ...proof, reused: false };
   } finally { lock.release(owner); }
 }
@@ -131,11 +150,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       try { input = JSON.parse(fs.readFileSync(process.argv[3] === '-' ? 0 : process.argv[3], 'utf8')); }
       catch { throw new Error('无法读取 UTF-8 JSON 上传请求；不输出含签名票据的原文'); }
       if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('LibTV 上传请求须为对象');
-      value = await transferLibTVFile(input.directory, input.item, input.ticket, { allowUpload: input.allowUpload, timeoutSeconds: input.timeoutSeconds });
+      value = await transferLibTVFile(input.directory, input.item, input.ticket, { allowUpload: input.allowUpload, timeoutSeconds: input.timeoutSeconds, recoverDnsFailure: input.recoverDnsFailure });
     } else throw new Error('用法：libtv_upload.mjs doctor | upload <request.json|->');
     process.stdout.write(JSON.stringify({ ok: true, value }) + '\n');
   } catch (error) {
-    process.stdout.write(JSON.stringify({ ok: false, error: error.message, ...(error.returned ? { returned: error.returned } : {}) }) + '\n');
+    process.stdout.write(JSON.stringify({ ok: false, error: error.message, ...(error.returned ? { returned: error.returned, storageFailed: true } : {}) }) + '\n');
     process.exitCode = 1;
   }
 }

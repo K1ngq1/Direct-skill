@@ -1,83 +1,175 @@
 # Direct Skill
 
-把脚本整理成人物、场景、分镜和自然语言 Prompt，交付一个可编辑的 `<片名>_分镜脚本.xlsx`，包含“分镜脚本／生成Prompt／人物与场景”三表。Agent 负责创作，本地脚本负责归档、校验、版本与导出；不内置模型 API。
+把 TXT、Markdown 或 Excel 粗脚本整理成人物、场景、分镜和完整 Prompt，交付可编辑的 `<片名>_分镜脚本.xlsx`。需要图片或 LibTV 画布时，在同一任务中接着完成已授权的媒体步骤。
 
-## 三个入口
+你提供脚本、目标时长和已有参考，Agent 负责创作、摄影、连续性与视觉判断。本地程序负责归档、版本、校验和 Excel；媒体由当前宿主连接的工具执行。
 
-| 文档 | 用途 |
-|---|---|
-| 本 README | 安装、最短使用步骤、能力与验证边界 |
-| [AGENTS.md](AGENTS.md) | 执行约束、原件保护、工程与交付要求 |
-| [SKILL.md](storyboard-workbench/SKILL.md) | 创作流程与按任务读取的规则索引 |
+## 1. 安装
 
-专项规则、命令合同和历史证据保留在原目录，由 Skill 按需引用，不必从头逐份阅读。
+先在终端确认 Node.js 20+ 和 Python 3.10+ 可用，再安装 Excel 依赖。
 
-## 安装与使用
+~~~text
+node --version
+python --version
+python -m pip install openpyxl
+~~~
 
-首次使用需要 Python 3.10+、Node.js 20+；Excel 依赖一次性安装 `python -m pip install openpyxl`。无需 Git 或 npm install。
+macOS / Linux 通常使用 `python3`，将上面的 Python 命令相应替换。
 
-**Windows：在 PowerShell 运行这一条安装命令：**
+Windows 在 PowerShell 执行安装命令。
 
-```powershell
+~~~powershell
 irm https://github.com/K1ngq1/Direct-skill/releases/latest/download/install.py | python -
-```
+~~~
 
-macOS / Linux：
+macOS / Linux 使用以下命令。
 
-```sh
+~~~sh
 curl -fsSL https://github.com/K1ngq1/Direct-skill/releases/latest/download/install.py | python3 -
-```
+~~~
 
-安装器只下载约560 KiB的独立运行包，校验ZIP和逐文件SHA-256，默认安装到 `$CODEX_HOME/skills/storyboard-workbench`，未设置时为 `~/.codex/skills/storyboard-workbench`。已有同名安装会保留并提示，不覆盖。下一轮可用 `$storyboard-workbench` 调用；其他宿主可在命令末尾追加 `--dest <宿主的skills目录>`。
+安装器会下载独立运行包，校验 ZIP 和逐文件 SHA-256，安装到 $CODEX_HOME/skills/storyboard-workbench；未设置 CODEX_HOME 时使用 ~/.codex/skills/storyboard-workbench。ExcelJS 已随包提供。已有同名安装会保留，并提示安装路径冲突。
 
-也可直接下载[独立ZIP](https://github.com/K1ngq1/Direct-skill/releases/latest/download/storyboard-workbench.zip)，把其中的 `storyboard-workbench` 文件夹放入宿主的skills目录。独立包入口已包含全部相对资源，不使用开发仓库的薄入口。
+其他宿主可用 --dest 指定其 skills 父目录，例如在已下载的安装器旁运行下面的命令。
 
-安装包只含规则、合同、脚本及必需运行库；**不含资产库、用户项目、测试样例、历史证据、Git历史或旧网页界面**。保留ExcelJS和少量被核心脚本引用的工作流辅助代码，以保证导出与任务执行可用。包内 `package-manifest.json` 记录源码commit及文件清单。
+~~~text
+python install.py --dest "<宿主的skills目录>"
+~~~
 
-**使用链路：**提供TXT/Markdown粗稿或XLSX → 归档与全片规划 → 生成人物／场景／分镜Prompt → 四步润色与语义核对 → 固定Excel → 按授权保存并提交MCP／生图任务 → 回执、恢复和集中回写。媒体使用宿主实际连接的工具，安装不会配置账号、API密钥或MCP服务；缺少工具时交付待提交请求。
+也可下载[独立 ZIP](https://github.com/K1ngq1/Direct-skill/releases/latest/download/storyboard-workbench.zip)，将其中的 storyboard-workbench 文件夹放入对应 skills 目录。[全部发布文件](https://github.com/K1ngq1/Direct-skill/releases/latest)
 
-安装后所有脚本路径以Skill安装目录解析，项目和输出保存在用户工作目录。`STORYBOARD_PYTHON` 可指定已有解释器的绝对路径。启动检查和命令详见共用Skill。
+**版本请以安装包的 `package-manifest.json` 为准。** 当前工作区的规则精简和执行优化仍待发布，Release 安装命令取得的是已发布版本。
 
-在项目会话中要求 Agent：“读取 `storyboard-workbench/SKILL.md`，把本次脚本整理成分镜 Excel。”提供原稿、目标时长与已确认参考。脚本不会代替 Agent 创作正文：
+## 2. 第一次使用
 
-```text
-python "storyboard-workbench/scripts/import_excel.py" "input.xlsx" "projects/demo"
-node "storyboard-workbench/scripts/visual.mjs" seal "projects/demo" "plan.json"
-node "storyboard-workbench/scripts/visual.mjs" export "projects/demo"
-```
+在 Codex 的下一次会话中调用 `$storyboard-workbench`，附上脚本文件并发送下面的要求。自动发现不可用时，直接要求 Agent 读取安装目录中的 SKILL.md。
 
-`plan.json` 由 Agent 在全片规划、创作和核对后提供。特殊列映射见[输入归档](storyboard-workbench/references/input-archive.md)。接手已有 Excel、修订、候选及反馈导回时，按 Skill 索引读取对应合同；正式文件持续原位更新，保留用户排版和意见。
+~~~text
+使用 storyboard-workbench 处理附件脚本，生成完整分镜 Excel。
+目标时长约 45 秒，横屏 16:9，写实生活喜剧。
+目前没有角色或场景参考图，请从文字设定开始。
+请先检查运行环境，再完成创作、核对、导出和正式文件验收。
+本次只完成文字与 Excel。
+~~~
 
-## 平台适配
+已有确定参考图时，附上图片并说明对应的人物、场景和用途。未指定时长时，Agent 根据脚本的动作与衔接估算。首次检查会确认运行环境和输入可读性，工具或依赖缺失时给出具体位置与处理办法。
 
-需要一次完成媒体准备时，可直接要求：“按单次自动制作模式处理这个粗脚本，自动检查并采用资产、生成分镜图，最后在 LibTV 建好视频节点，不生成视频，中途不用等我确认。” 当前 Agent 会按[单次自动制作流程](storyboard-workbench/references/single-run.md)连续推进，复用现有工具、队列和 Excel，不安装常驻后台；实际工具或额度缺失时保留已完成成果并报告阻塞。
-
-| 宿主 | 项目发现入口 |
+| 工作表 | 你可以查看或使用的内容 |
 |---|---|
-| Codex | `.agents/skills/storyboard-workbench/` |
-| Claude Code | `.claude/skills/storyboard-workbench/`，`CLAUDE.md` 兼容入口 |
-| WorkBuddy | `.codebuddy/skills/storyboard-workbench/` |
-| 其他宿主 | 显式读取共用 Skill，使用 `--adapter default` |
+| 分镜脚本 | 镜头顺序、预计时长、画面、动作、对白、摄影、衔接和用户意见 |
+| 生成Prompt | 完整人物、场景和分镜 Prompt，按任务加入视频正文与参数 |
+| 人物与场景 | 共用造型、布景设定、参考图及关联镜头 |
 
-上表是开发仓库的项目薄入口，依赖完整仓库，不能单独复制到全局目录；发布ZIP已有独立入口，可直接安装。自动发现不可用时直接指定共用 Skill。宿主与模型分别选择，API 使用用户已有配置；支持项、观察能力及降级方式见[适配参考](storyboard-workbench/adapters/README.md)。
+原稿、正文版本、核对记录和制作日志保存在本地项目目录。后续可继续修改同一个项目，意见与历史随版本保留。
+
+## 3. 全流程与架构
+
+默认走文本与 Excel 路径。媒体分支由你选择，Agent 按当前步骤读取必要规则，并调用本地程序或已连接的工具。
+
+~~~mermaid
+flowchart TD
+    A["用户提供脚本、目标时长与参考"] --> B["宿主 Agent<br/>读取 Skill 入口与本次必要规则"]
+    B --> C["归档原稿，统一人物、场景与全片连续性"]
+    C --> D["创作人物、场景、静帧与所需视频 Prompt"]
+    D --> J["本地 JSON<br/>正文、来源与版本"]
+    J --> E["程序硬校验与 Agent 语义核对<br/>具体问题局部修复"]
+    E --> F["集中导出并回读正式 Excel"]
+    F --> G["用户取得三表工作簿与制作日志"]
+    E --> H{"本次媒体授权"}
+    H -->|"仅配置画布"| I["MCP 创建或更新节点与引用边<br/>全部 run:false"]
+    I --> K["回读 Prompt、模型、参数与连线"]
+    H -->|"生成图片并准备视频节点"| L["图片工具生成资产<br/>保存原件并看图采用或确认"]
+    L --> M["依赖就绪后生成分镜图<br/>逐张保存与检查"]
+    M --> N["LibTV 上传、审核与挂图<br/>配置待运行视频节点"]
+    N --> K
+    H -->|"明确授权视频生成"| O["MCP 按原任务身份执行<br/>查询结果并检查实际媒体"]
+    O --> P["保存回执、产物与验收结论"]
+    K --> P
+    P --> J
+    P --> Q["按本次交付范围更新 Excel 和日志"]
+    Q --> G
+~~~
+
+Agent 负责创作与视觉判断，本地脚本负责确定性的文件、版本和检查操作，图片工具或 LibTV MCP 负责媒体执行。正文以同一版 JSON 为准，Excel 和工具请求从该版本取值。完整的十一维画面要求、摄影、事实保护和连续性要求由共享 Skill 维护。[规则与操作入口](storyboard-workbench/SKILL.md)
+
+## 4. 按任务选择用法
+
+### 一次完成图片制作和视频节点准备
+
+先在宿主中连接可用的图片工具与 LibTV MCP，并完成账户授权，再提供脚本。
+
+~~~text
+按单次自动制作模式处理这份脚本。
+生成必要的人物、场景和分镜图片，实际看图后由你检查并采用合格图。
+将本轮图片上传 LibTV，连接对应的视频 Prompt，所有视频节点使用 run:false。
+最后交付 Excel、画布链接和具体待处理项，连续完成已授权步骤。
+~~~
+
+这项指令授权 Agent 采用本轮检查合格的图片并推进依赖。图片数量和工具按本次要求确定，失败或未知项保留原回执，实际付费重试仍按授权处理。[单次自动制作流程](storyboard-workbench/references/single-run.md)
+
+### 已有 Prompt，只接好 MCP 链路
+
+~~~text
+使用这个项目已封存的 Prompt，连接人物、场景、分镜图片到视频节点的完整链路。
+先回读现有画布，再复用或补齐节点和引用边。
+所有节点使用 run:false，只完成配置和回读验收。
+~~~
+
+此路径交付的是待运行节点。后续需要执行某些节点时，再明确给出工具、数量与生成范围。已有图片和待生成节点的引用状态会分别记录，节点连接成功后仍需通过实际媒体检查。[媒体操作索引](storyboard-workbench/references/media-execution.md)
+
+### 接着修改脚本或 Excel
+
+~~~text
+继续这个项目。只修改第 5 镜的动作与对应 Prompt，保留其余已确认设定。
+先读取我在 Excel 用户意见栏填写的反馈，核对受影响的连续性，更新正式文件并保留历史。
+~~~
+
+提供项目目录与当前工作簿。新会话接手时，Agent 从项目文件核对正文版本、反馈和未完成项。Excel 更新保留用户排版、图片与意见；同格冲突会指出具体位置。[交付与反馈合同](storyboard-workbench/references/visual-workflow.md)
+
+### 中断后继续
+
+~~~text
+从这个项目的原检查点继续，先核对已完成、待运行和未知任务。
+沿用原任务身份与回执恢复，继续尚未提交且依赖已就绪的已授权项。
+告诉我具体阻塞和已完成交付。
+~~~
+
+同时提供原项目目录或原画布。连接中断、令牌过期、回执保存失败和内容问题有各自的恢复路径。已经提交但状态未知的任务须先回读确认。[恢复操作索引](storyboard-workbench/references/media-execution.md)
+
+## 5. 宿主与版本选择
+
+| 使用方式 | 入口 |
+|---|---|
+| 独立包安装 | 安装目录中的 SKILL.md，在宿主中调用 storyboard-workbench |
+| Codex 开发仓库 | .agents/skills/storyboard-workbench/ |
+| Claude Code 开发仓库 | .claude/skills/storyboard-workbench/，CLAUDE.md 提供兼容入口 |
+| WorkBuddy 开发仓库 | .codebuddy/skills/storyboard-workbench/ |
+| 其他宿主 | 显式读取共用 Skill，选择 default 适配 |
+
+开发仓库的薄入口依赖完整目录，独立 ZIP 包已包含其运行资源。宿主使用已有模型配置，图片或 MCP 服务需要在宿主中另行连接。安装器处理 Skill 文件，账户、密钥、额度与媒体授权由使用环境提供。[平台适配说明](storyboard-workbench/adapters/README.md)
 
 ## 范围与验证状态
 
-- 默认完成文本与 Excel；视频 Prompt／规划按需提供。图片、视频、音频生成需要明确授权。
-- 新任务采用 v2 合同；旧项目按原合同读取，不自动迁移。实际工具能力以本次观察为准。
-- 本地装载、链接与数据合同已有测试。Claude Code、WorkBuddy 客户端及跨模型端到端效果未验证，平台入口只承诺适配。
-- 2026-10-29 的八组单模型表达规则对照为七组持平、一组新稿漏限制作局部修复，**没有证明质量提升**。归档：[表达规则验证](docs/PROMPT-LANGUAGE-VERIFICATION.md)、[首版记录](docs/FIRST-RELEASE.md)、[媒体执行记录](docs/MEDIA-PIPELINE-VERIFICATION.md)。这些材料不是日常必读规则。
-- Excel 的字体设置不等于目标软件实际显示；交付时按 AGENTS 的要求检查中文与排版。
+- 新任务使用 v2 合同，历史项目继续按原合同读取。实际宿主能力以本次运行观察为准。
+- 交付验收分别记录程序检查、正文核对、画面检查与用户确认。节点存在、任务接受或规则哈希均不足以证明实际画面质量。
+- 本地装载、链接、数据合同和执行恢复有程序测试。Claude Code、WorkBuddy 客户端及跨模型端到端效果仍需实际验证。
+- 规则精简的收益需通过真实任务测量；模型遵循规则的效果与媒体生成质量仍需验收。历史对照及限制见[表达规则验证](docs/PROMPT-LANGUAGE-VERIFICATION.md)、[首版记录](docs/FIRST-RELEASE.md)、[媒体执行记录](docs/MEDIA-PIPELINE-VERIFICATION.md)。
+- 中文字体与排版需在交付目标环境核对。安装和本地项目使用说明以本 README 为入口，Agent 执行约束见 [AGENTS.md](AGENTS.md)，业务规则按 [Skill](storyboard-workbench/SKILL.md) 路由读取。
 
-## 维护
+<details>
+<summary>开发与发布维护</summary>
 
-```text
+从完整仓库运行与改动范围相称的检查。
+
+~~~text
 npm test
 python -m unittest discover -s storyboard-workbench/tests -p "test_import*.py"
-```
+~~~
 
-发布维护：用 `python distribution/build.py --output <新文件.zip>` 从已提交的公开运行文件构建；推送 `skill-v*` 标签后，GitHub Actions验证独立包并发布ZIP、校验文件和安装器。资产库永远不参与打包扫描。
+使用 `python distribution/build.py --output <新文件.zip>` 从已提交的公开运行文件构建独立包。推送 `skill-v*` 标签后由 GitHub Actions 验证并发布 ZIP、校验文件和安装器。包内 package-manifest.json 记录源码提交及文件清单，用户项目、素材、凭据和历史人评保存在本地。
 
-按改动范围选择必要检查。新增宿主或模型在[适配注册表](storyboard-workbench/adapters/manifest.json)登记，复用现有加载器；业务规则仅在 Skill 指向的权威位置修改。测试使用合成输入，不提交私有素材、真实人评、凭据或个人绝对路径。
+新增宿主或模型在[适配注册表](storyboard-workbench/adapters/manifest.json)登记，复用共享规则加载器。测试使用合成输入，实际平台验证记录保留版本、输入、工具条件与结果。
+
+</details>
 
 项目采用 [MIT](LICENSE)。随包第三方材料保留各自许可证：[ExcelJS](storyboard-workbench/scripts/vendor/LICENSE-exceljs)、[Humanizer-zh](storyboard-workbench/references/humanizer-zh/LICENSE)、[导演规则来源](storyboard-workbench/references/director-license.txt)。

@@ -59,8 +59,11 @@ export async function generationStreamBridge(input, api) {
     write(filename, summary); return { ...summary, path: filename };
   }
   if (operation !== 'stream-next') fail('未知流水线操作');
+  const activeIds = new Set(input.activeIds ?? []);
+  if (!Array.isArray(input.activeIds ?? []) || [...activeIds].some(id => !spec.tasks.some(task => task.id === id))) fail('在途任务身份无效');
   const statuses = Object.create(null), candidates = [], blocked = [], usableStoryboards = [], awaitingReview = [];
   for (const task of spec.tasks) {
+    if (activeIds.has(task.id)) continue;
     const directory = path.join(root, task.id), preparedFile = path.join(directory, 'prepared.json');
     let prepared;
     try {
