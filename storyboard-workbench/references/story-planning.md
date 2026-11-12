@@ -37,7 +37,7 @@ node <skill>/scripts/server.mjs <project> --open
 
 ## 计划输入
 
-字段见[数据契约](data-contract.md#普通故事与默认草案)。可离线参考随包[六镜计划](../tests/fixtures/story-handoff-plan.json)、[普通故事](../tests/fixtures/story-handoff-source.md)和[验收要求](../tests/fixtures/story-handoff-acceptance.md)：它们是软件样例，不是用户已采用作品。
+字段见[数据契约](data-contract.md#普通故事与默认草案)。本次输入与项目状态由用户本地提供，测试样例保留在本地测试目录。
 
 顶层：title、overview、aspectRatio、targetDuration、brief、productionInventory、storyPlan、shots；references、promptSections、sharedConstraints、reviewIssues 可省略。
 
