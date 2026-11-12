@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the standalone storyboard-workbench release without Git."""
+"""Install Direct Skill and configure LibTV MCP in Codex without Git."""
 
 import argparse
 import hashlib
@@ -17,10 +17,10 @@ import urllib.request
 import zipfile
 
 
-PACKAGE = "storyboard-workbench"
+PACKAGE = "direct-skill"
 RELEASE_URL = (
     "https://github.com/K1ngq1/Direct-skill/releases/latest/download/"
-    "storyboard-workbench.zip"
+    "direct-skill.zip"
 )
 LIBTV_URL = "https://mcp.liblib.tv/mcp"
 HASH_PATTERN = re.compile(r"[0-9a-fA-F]{64}")

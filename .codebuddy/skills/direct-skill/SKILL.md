@@ -1,5 +1,5 @@
 ---
-name: storyboard-workbench
+name: direct-skill
 description: Use this repository's shared storyboard Skill to create and validate linked prompts and an editable Excel deliverable.
 ---
 

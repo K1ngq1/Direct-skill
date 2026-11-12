@@ -6,7 +6,7 @@
 
 Codex 按项目根至当前目录的路径组合项目指令，更靠近当前目录的规则覆盖较早规则；配置的 override、文件名与大小限制会影响结果。原生 Skill 发现使用项目 `.agents/skills/<name>/SKILL.md`，与 `AGENTS.md` 加载是两件事。[官方项目指令](https://developers.openai.com/codex/guides/agents-md)、[官方 Skill](https://developers.openai.com/codex/skills)。
 
-最小使用方式是在仓库根开启会话，明确要求“读取 storyboard-workbench/SKILL.md，并用 codex 适配按阶段执行”。本仓库 `.agents/skills/storyboard-workbench/SKILL.md` 是仅定位 canonical Skill 的薄入口，须保留相对目录关系；Codex 也支持 Skill 目录符号链接。不要同时维护两份业务规则，或只把裸入口复制到另一项目。已发现的 Skill 可通过当前客户端的 Skill 选择器调用，CLI/IDE 支持 `$storyboard-workbench`。
+最小使用方式是在仓库根开启会话，明确要求“读取 storyboard-workbench/SKILL.md，并用 codex 适配按阶段执行”。本仓库 `.agents/skills/direct-skill/SKILL.md` 是仅定位 canonical Skill 的薄入口，须保留相对目录关系；Codex 也支持 Skill 目录符号链接。不要同时维护两份业务规则，或只把裸入口复制到另一项目。已发现的 Skill 可通过当前客户端的 Skill 选择器调用，CLI/IDE 支持 `$direct-skill`。
 
 ```text
 node "storyboard-workbench/scripts/runtime.mjs" doctor

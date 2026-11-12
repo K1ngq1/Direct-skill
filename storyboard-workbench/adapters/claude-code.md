@@ -6,7 +6,7 @@
 
 在 VS Code 安装并打开 Anthropic 官方 Claude Code 扩展后，以本仓库作为工作目录；已经安装时沿用现有配置。[官方 VS Code 说明](https://code.claude.com/docs/en/vs-code)。
 
-项目 Skill 的官方目录是 `.claude/skills/<name>/SKILL.md`。本仓库薄入口定位 `storyboard-workbench/SKILL.md`，须保留相对目录关系，不能只将裸入口复制到另一项目；也可在会话中明确要求读取 canonical Skill。原生 Skill 可以用 `/storyboard-workbench` 调用。[官方 Skill 加载](https://code.claude.com/docs/en/skills)。
+项目 Skill 的官方目录是 `.claude/skills/<name>/SKILL.md`。本仓库 `.claude/skills/direct-skill/SKILL.md` 薄入口定位 `storyboard-workbench/SKILL.md`，须保留相对目录关系，不能只将裸入口复制到另一项目；也可在会话中明确要求读取 canonical Skill。原生 Skill 可以用 `/direct-skill` 调用。[官方 Skill 加载](https://code.claude.com/docs/en/skills)。
 
 根 `CLAUDE.md` 保留 `@AGENTS.md` 引用作为兼容入口。最新 Claude Code 文档也描述了原生 `AGENTS.md` 的条件加载；不同版本或已有 CLAUDE 文件会影响结果，所以不能仅凭文件存在推断当前会话已加载。可在当前版本支持时用 `/context` 检查指令文件列表。[官方指令加载](https://code.claude.com/docs/en/memory#agents-md)。
 

@@ -8,13 +8,13 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-NAME = 'storyboard-workbench'
+NAME = 'direct-skill'
 ENTRY = '''---
-name: storyboard-workbench
+name: direct-skill
 description: Turn rough scripts into linked storyboard Prompts, refine their wording, export Excel, and submit authorized tasks through the host's connected image or MCP tools.
 ---
 
-# 导演分镜 Skill
+# Direct Skill
 
 先读取[执行约束](AGENTS.md)和唯一[创作流程](storyboard-workbench/SKILL.md)，按阶段继续。
 本目录是独立安装包根目录。资源与脚本相对路径从这里定位，执行命令时换成绝对路径；项目和输出放在用户工作目录。

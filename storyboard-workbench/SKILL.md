@@ -1,9 +1,9 @@
 ---
-name: storyboard-workbench
+name: direct-skill
 description: Turn scripts into linked characters, scenes, storyboards and natural-language prompts, with local validation and a persistent Excel deliverable.
 ---
 
-# 导演分镜与 Excel
+# Direct Skill — 导演分镜与 Excel
 
 先读一次[项目约束](../AGENTS.md)。本页负责选路，Agent 创作完整自然正文，程序保存来源、校验、版本和 Excel。当前用户要求决定本轮范围。
 

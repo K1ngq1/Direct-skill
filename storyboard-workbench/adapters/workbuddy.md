@@ -6,7 +6,7 @@
 
 WorkBuddy 自身官方项目文档明确：代码开发项目可读取 `.codebuddy/rules/`、`.codebuddy/skills/<name>/SKILL.md` 等项目配置，兼容 `AGENTS.md`；项目配置的 Skill 与项目指令也可供项目任务使用。[WorkBuddy 官方项目说明](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Project)。
 
-在 WorkBuddy 打开能访问本仓库的项目工作目录，先明确要求读取 `storyboard-workbench/SKILL.md`。本仓库 `.codebuddy/skills/storyboard-workbench/SKILL.md` 是仅定位 canonical Skill 的薄入口；保留相对目录关系，不把裸入口复制到其他项目，不复制整套业务规则。不同客户端界面的“项目资料/技能”不一定等同本地工作目录，先核对任务能否读取完整 Skill 及输入文件。
+在 WorkBuddy 打开能访问本仓库的项目工作目录，先明确要求读取 `storyboard-workbench/SKILL.md`。本仓库 `.codebuddy/skills/direct-skill/SKILL.md` 是仅定位 canonical Skill 的薄入口；保留相对目录关系，不把裸入口复制到其他项目，不复制整套业务规则。不同客户端界面的“项目资料/技能”不一定等同本地工作目录，先核对任务能否读取完整 Skill 及输入文件。
 
 ```text
 node "storyboard-workbench/scripts/runtime.mjs" doctor

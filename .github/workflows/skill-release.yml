@@ -18,14 +18,15 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python distribution/public_files.py
       - run: node storyboard-workbench/scripts/runtime.mjs doctor
-      - run: python distribution/build.py --output release/storyboard-workbench.zip
+      - run: python distribution/build.py --output release/direct-skill.zip
       - name: Publish ZIP and installer
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          release/storyboard-workbench.zip
-          release/storyboard-workbench.zip.sha256
+          release/direct-skill.zip
+          release/direct-skill.zip.sha256
           distribution/install.py
-          --title "Storyboard Skill $GITHUB_REF_NAME"
-          --notes "Standalone runtime only. No Git clone, private assets, tests, Git history or browser UI. Requires Python 3.10+, Node 20+ and openpyxl. The installer configures LibTV MCP in Codex and guides account authorization (Codex CLI required). Use --skip-mcp for files only or --mcp-only to retry setup. Other hosts and image tools remain host-managed."
+          --title "Direct Skill $GITHUB_REF_NAME"
+          --latest
+          --notes "Direct Skill：统一安装目录与调用名 direct-skill；安装器自动配置 Codex 的 LibTV MCP，并引导用户使用自己的账号授权。可用 --skip-mcp 只装文件，或 --mcp-only 为已有安装补配连接。README 提供可按实际场景修改的参考 Prompt。随包包含中文润色规则、导演规则和 ExcelJS；不携带私人素材、测试或账号。需要 Python 3.10+、Node 20+、openpyxl，自动配置需要 Codex CLI。其他宿主通过各自入口连接 MCP。"

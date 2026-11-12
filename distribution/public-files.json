@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "files": [
-    ".agents/skills/storyboard-workbench/SKILL.md",
-    ".claude/skills/storyboard-workbench/SKILL.md",
-    ".codebuddy/skills/storyboard-workbench/SKILL.md",
+    ".agents/skills/direct-skill/SKILL.md",
+    ".claude/skills/direct-skill/SKILL.md",
+    ".codebuddy/skills/direct-skill/SKILL.md",
     ".gitattributes",
     ".github/workflows/runtime.yml",
     ".github/workflows/skill-release.yml",
