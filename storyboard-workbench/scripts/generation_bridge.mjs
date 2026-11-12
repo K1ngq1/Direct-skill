@@ -3,6 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { createGenerationPipelineStore } from './generation_batch_store.mjs';
+import { agentImageSelected, singleRunEnabled, userImageConfirmed } from './single_run.mjs';
+import { generationStreamBridge } from './generation_stream.mjs';
 
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -22,6 +24,8 @@ function selected(source) {
 // Preparation only reads creative sources; it never claims or submits media tasks.
 export function prepareRequests(recipe) {
   const started = performance.now();
+  const plan = recipe.planSource ? selected(recipe.planSource) : null;
+  if (plan) singleRunEnabled(plan);
   if (!Array.isArray(recipe.jobs) || !recipe.jobs.length) fail('准备任务不能为空');
   const ids = new Set();
   const entries = recipe.jobs.map(entry => {
@@ -31,6 +35,8 @@ export function prepareRequests(recipe) {
     if (typeof prompt !== 'string' || !prompt.trim()) fail('正文来源不是完整文本');
     if (entry.request?.prompt !== undefined && entry.request.prompt !== prompt) fail('提交正文与创作来源不一致');
     const sources = [{ ...entry.source, sha256: sourceHash(entry.source) }];
+    for (const source of entry.contextSources ?? []) sources.push({ ...source, sha256: sourceHash(source) });
+    if (recipe.planSource) sources.push({ ...recipe.planSource, sha256: sourceHash(recipe.planSource) });
     const blocked = [];
     if (!recipe.tool) blocked.push('tool-not-selected');
     if (!entry.request) blocked.push('parameters-not-ready');
@@ -43,7 +49,18 @@ export function prepareRequests(recipe) {
       const confirmation = selected(ref.confirmation);
       sources.push({ ...ref.confirmation, sha256: sourceHash(ref.confirmation) });
       sources.push({ path: ref.path, sha256: hash(ref.path) });
-      if (confirmation?.status !== 'confirmed' || confirmation.by !== 'user' || confirmation.assetId !== ref.assetId || confirmation.path !== ref.path || confirmation.sha256 !== hash(ref.path)) blocked.push('reference-not-confirmed');
+      const manifest = plan ? read(ref.confirmation.path) : null;
+      const sameProject = plan && typeof plan.projectId === 'string' && manifest?.projectId === plan.projectId &&
+        manifest.sourcePlanHash === createHash('sha256').update(JSON.stringify(plan)).digest('hex');
+      if (sameProject) for (const pointer of ['/projectId', '/sourcePlanHash']) {
+        const source = { path: ref.confirmation.path, pointer };
+        sources.push({ ...source, sha256: sourceHash(source) });
+      }
+      const adopted = confirmation?.status === 'confirmed' && confirmation.by === 'user' ||
+        sameProject && confirmation?.status === 'succeeded' && (userImageConfirmed(confirmation) || agentImageSelected(plan, confirmation));
+      const output = confirmation?.output ?? confirmation;
+      const imagePath = confirmation?.output ? path.resolve(path.dirname(ref.confirmation.path), output.path ?? '') : output?.path;
+      if (!adopted || (confirmation.assetId ?? confirmation.targetId) !== ref.assetId || imagePath !== ref.path || output?.sha256 !== hash(ref.path)) blocked.push('reference-not-confirmed');
     }
     if (recipe.phase === 'storyboards' && (!references.length || !entry.requiredAssetIds?.length)) blocked.push('asset-bindings-missing');
     for (const assetId of entry.requiredAssetIds ?? []) if (!references.some(ref => ref.assetId === assetId)) blocked.push('asset-binding-missing:' + assetId);
@@ -61,6 +78,7 @@ function verifyPrepared(prepared, id) {
 
 export async function bridge(input) {
   const { operation, directory, args = [] } = input;
+  if (operation.startsWith('stream-')) return generationStreamBridge(input, { bridge, prepareRequests, verifyPrepared, selected, sourceHash, agentImageSelected, userImageConfirmed });
   if (operation === 'compile') {
     const prepared = prepareRequests(read(input.recipe));
     writeOnce(input.output, prepared);
@@ -80,18 +98,25 @@ export async function bridge(input) {
     const file = path.join(root, 'prepared.json');
     if (fs.existsSync(file)) { if (JSON.stringify(read(file)) !== JSON.stringify(prepared)) fail('不能覆盖原准备记录'); }
     else writeOnce(file, prepared);
-    return { batch: store.batch, run: store.run, concurrency: prepared.concurrency, jobs: store.jobs.map(({ id, dependsOn }) => ({ id, dependsOn })), initialStates: store.snapshot() };
+    return { batch: store.batch, tool: prepared.tool, run: store.run, concurrency: prepared.concurrency, jobs: store.jobs.map(({ id, dependsOn }) => ({ id, dependsOn })), initialStates: store.snapshot() };
   }
   if (operation === 'summarize') {
     const started = performance.now();
-    const states = store.snapshot();
-    const results = plan.jobs.map(job => states[job.id] ?? { id: job.id, status: 'paused' });
+    const report = args[0] ?? { deliveryAllowed: true };
+    const unresolved = new Map((report.finalizationChecks ?? []).filter(check => check.outcome === 'unresolved').map(check => [check.id, check.blockedBy]));
+    const results = plan.jobs.map(job => {
+      if (unresolved.has(job.id)) return { id: job.id, status: 'unknown', stage: 'finalize', error: unresolved.get(job.id) };
+      const { request, resolvedReferences, ...state } = store.load(job.id) ?? { id: job.id, status: 'paused' };
+      return state;
+    });
     const toolWaitMs = results.reduce((sum, item) => sum + (item.toolReturnedAt && item.callStartedAt ? Math.max(0, Date.parse(item.toolReturnedAt) - Date.parse(item.callStartedAt)) : 0), 0);
     const receiptSaveMs = results.reduce((sum, item) => sum + (item.finalizeMs ?? 0), 0);
-    const summary = store.summarize(results, { ...(args[0] ?? { deliveryAllowed: true }), timing: { preparationMs: prepared?.preparationMs ?? null, toolWaitMs, receiptSaveMs, source: 'host-events; excludes-user-wait; not-gpu-time' } });
-    return { ...summary, summaryMs: performance.now() - started };
+    const summary = store.summarize(results, { ...report, timing: { preparationMs: prepared?.preparationMs ?? null, toolWaitMs, receiptSaveMs,
+      returnToCaptureMs: report.returnToCaptureMs ?? [], nextSubmissionAfterCaptureMs: report.nextSubmissionAfterCaptureMs ?? [],
+      batchWallMs: report.totalMs ?? null, source: 'host-events; excludes-user-wait; not-gpu-time' } });
+    return { ...summary, ...(report.finalizationChecks ? { finalizationChecks: report.finalizationChecks } : {}), summaryMs: performance.now() - started };
   }
-  if (!['snapshot', 'readControl', 'setControl', 'acknowledgeControl', 'prepare', 'capture', 'finalize', 'load', 'inspectFinalization', 'recoverFinalization'].includes(operation)) fail('未知存储操作');
+  if (!['snapshot', 'readControl', 'setControl', 'acknowledgeControl', 'prepare', 'capture', 'finalize', 'reconcileFinalization', 'load', 'inspectFinalization', 'recoverFinalization'].includes(operation)) fail('未知存储操作');
   return store[operation](...args);
 }
 

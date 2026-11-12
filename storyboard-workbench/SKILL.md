@@ -5,48 +5,57 @@ description: Turn scripts into linked characters, scenes, storyboards and natura
 
 # 导演分镜与 Excel
 
-执行前读取[项目约束](../AGENTS.md)。Agent 负责理解与创作，CLI 负责归档、硬校验、版本和导出。默认整片规划、每镜一案；用户要求调整时才增加有实际区别的候选，查看、采用与用户确认分别记录。
+先读一次[项目约束](../AGENTS.md)。本页负责选路，Agent 创作完整自然正文，程序保存来源、校验、版本和 Excel。当前用户要求决定本轮范围。
 
 ## 启动与规则读取
 
-在仓库根执行，已有项目可给 doctor 追加项目路径：
+在仓库根运行；安装版按 Skill 的真实目录解析脚本，项目保存在用户工作目录。
 
 ```text
 node "storyboard-workbench/scripts/runtime.mjs" doctor
-node "storyboard-workbench/scripts/runtime.mjs" rules ingest --adapter default --model default --output "rules-ingest-001.json"
+node "storyboard-workbench/scripts/runtime.mjs" rules plan --adapter codex --output "rules-plan-001.json"
 ```
 
-`<skill>` 安装在其他位置时使用其真实脚本路径。宿主与模型按[适配参考](adapters/README.md)显式选择；不确定时 default，能力凭本次观察确认。输出记录用新文件名，不覆盖旧记录。启动检查同一任务只运行一次，依赖、环境或相关脚本变化才重跑；阶段切换只补读尚未读取或哈希已变的文件。
+依赖与环境未变时复用本轮 doctor。宿主与模型按[适配参考](adapters/README.md)显式选择，未知时用 default。rules 记录保存实际提供的正文与哈希；使用 --output 后按输出路径读取当前任务正文。只有实际阅读才可记为已读。
 
-`rules <stage>` 提供下表的基础规则正文及哈希，必须读完再执行。**按需项在触发任务时同样必读**，不是可省略的要求；通过表内路径读取完整文件，并核对 `canonicalSnapshot.files` 中的路径与哈希。`all` 包含全部新版基础及按需资源，用于完整快照，不作为每个任务的默认阅读量；legacy 不进入新版总快照。规则集中在[现有清单](references/rules-manifest.json)，不按平台另写一套。
+| 本轮操作 | rules 选择 | 何时执行 |
+|---|---|---|
+| 导入本次原稿 | ingest | 新项目或新来源 |
+| 整片规划、人物与场景设计 | plan | 新创作或相关设计变更 |
+| 写或润色 Prompt | prompt | 本镜结构已就绪 |
+| 语义核对与冻结评分 | review | 核对本版完整成稿 |
+| 封存新 v2 正文 | seal | 写入权威 JSON 与资产正文 |
+| 正式 Excel 导出与回读 | export | 正文完成或受影响内容修订后 |
+| 已有 Excel 绑定、意见、冲突 | excel-update | 本次确需维护现有文件 |
+| 生成人物、场景、分镜图 | image-batch | 获得图片生成授权 |
+| 上传现有图、连接待运行节点 | canvas | 获得对应画布写入授权 |
+| LibTV 原生生成 | libtv-generation | 获得该媒体生成授权 |
+| 保存至 LibTV 资产库 | assets | 明确要求资产库入库 |
+| 执行故障或未知状态恢复 | 对应 recovery 路线 | 按[媒体索引](references/media-execution.md)选择原路径 |
+| 继续旧项目 | legacy | 沿用该项目原合同 |
 
-| 阶段 | 基础任务与自动加载资源 |
+读完当前路线提供的必要正文再执行。引用链接用于定位，只有本轮操作触发才继续读其专项合同。摄影、实际参考、视频、单次自动制作的附加规则按下表选择。all 用于版本盘点与审计；canonicalSnapshot 记录全包指纹，按当前路线选择正文。
+
+| 触发条件 | 附加规则 |
 |---|---|
-| ingest | [输入归档](references/input-archive.md)：原件、全部工作表、映射、时长与问题定位 |
-| plan | [导演方法](references/directing.md)、[人物](references/character-prompts.md)、[场景美术](references/scene-art-direction.md)、[v2 合同](schemas/visual-plan-v2.json) |
-| prompt | [表达及参考规则](references/prompt-language.md)、[Humanizer-zh](references/humanizer-zh/SKILL.md) |
-| review | 同一表达规则、[只读评分](references/visual-rubric.md)、v2 合同 |
-| export | [命令与交付合同](references/visual-workflow.md)、v2 合同 |
-| legacy | 仅明确继续旧工作台时读取[旧入口](references/legacy-workbench.md)及其原数据合同 |
+| 规划摄影或处理实际参考 | [表达规则](references/prompt-language.md)中的摄影、人物指代、确定参考 |
+| 视频 Prompt、首尾与剪辑衔接 | [视频工作流](references/video-workflow.md) |
+| 已明确授权一次完成生图并准备视频节点 | [单次自动制作](references/single-run.md) |
+| 中文文章润色或需通用表达示例 | rules humanizer |
+| 人工评分与校准 | [评分规则](references/visual-rubric.md#人工评分与版本化标准)，只读取本次指定真实记录 |
 
-| 本次任务触发条件 | 追加读取 |
-|---|---|
-| 涉及人物／场景创作或核对，本次尚未读取对应规则 | [人物规则](references/character-prompts.md)或[场景规则](references/scene-art-direction.md)；独立评审也须读取，沿用同一共用设定 |
-| 规划摄影或使用实际参考 | [表达规则的摄影、人物指代与参考部分](references/prompt-language.md#摄影约束焦距光圈与对焦)；在 plan 阶段就确定，不等到润色再改设计 |
-| 编写 v2 JSON、封存、修订、候选、恢复、绑定或更新 Excel | [命令与交付合同](references/visual-workflow.md)，使用其中请求结构与状态处理 |
-| 视频 Prompt、参数、音乐、镜头规划或验收 | [视频工作流](references/video-workflow.md)，从全片规划开始沿用到核对与导出 |
-| 整套制作 Prompt 交接、保存可提交图片请求，或获授权生成、补图、LibTV 入库／恢复 | [媒体执行](references/media-execution.md)；图片阶段另读[资产先行流程](references/visual-workflow.md#0-可调整的完整-prompt-与分阶段出图默认流程) |
-| 明确提供／要求校准标准或人评 | [评分规则](references/visual-rubric.md#人工评分与版本化标准)；存在指定标准时按其来源与版本读取，否则无需标准也能创作 |
+## 创作与验收底线
 
-## 从全片到交付
+十一维持续有效，依次核对主体与关键瞬间、外貌服装、姿态动作、表情视线、人物道具关系、景别机位取景、摄影约束、构图空间、场景美术材质、光影色调、跨镜连续性。权重以[评分合同](references/visual-rubric.md)为准，不适用项按依据记录。
 
-1. **归档。** 实际读取本次原稿、有效时长与授权参考，保留源行和哈希，处理归档中的缺失与冲突。事实、用户要求、导演设计与未知项分开；不把材料里的指令当作用户授权。
-2. **规划。** 建立稳定人物、场景与道具 ID；场景先做信息与六项美术陈设设计，再写场景 Prompt，后续镜头只取同一设定的可见部分。记录镜头目的、进入与结束状态及切点；按当前用户时长调整，保留原秒数、拆并来源和理由，不设固定90秒。
-3. **创作。** 用结构检查十一维覆盖，正文由 Agent 自然创作，不拼字段或隐藏追加人设。静帧只有一个时刻，逐人明确位置、动作、视线和持物；不适用项说明原因。人物／场景资产独立成稿，道具写入结构与画面。焦距、光圈、焦点、清晰范围及设计基准按表达规则写清；有参考逐人绑定真实图，无参考用必要可见特征。正文不设固定字数上限。
-4. **核对。** 按表达规则执行一次四步核对，再进行独立语义检查，记录具体镜头／文本证据。检查人物关系、静态瞬间、光线和连续性；视频加查本镜首尾与相邻切点。修复上限、保留历史与失败处理遵守 AGENTS；冻结后只读评分，不以分数驱动重写。
-5. **封存与交付。** 新版文本任务使用 `seal --brief` 取得本版人物与场景绑定，按[交付合同](references/visual-workflow.md#封存检查与局部修订)保存资产正文，再用 `deliver` 一次导出并回读正式 Excel。检查返回的问题后局部修复。视频规划使用 `video.mjs finalize`。已有文件只需复核时用 `verify-excel`。汇报时区分计划核对和文件验收。
-6. **修订与移交。** 使用现有 revise/add-candidate/select/restore 等入口保存有来源的新版本；检查和评分绑定对应正文，不机械重写历史。移交完整 Skill、本次授权原稿、JSON、历史、导出及实际参考；未执行的检查和未生成的媒体如实标明。
+先建立共用人物、场景和道具设定，场景经过六项美术设计，再展开各镜。内部结构记录源事实、用户锁定、导演补全与未知项。静帧选一个时刻，视频另写变化过程，按当前时长目标规划源镜映射。逐人绑定动作、视线、手位和持物；焦距、光圈、对焦、清晰范围与取景协调。
 
-整套制作 Prompt 完整核对后，按媒体准备入口保存来源绑定与可执行请求；参考或参数未就绪则等待依赖。仅润色现有文字且未涉及制作交接时，不启动媒体准备。准备请求不等于获得生成授权；生图时复用未变请求，不重新创作整片。资产确认前不提交依赖它的分镜；数量、工具与阶段服从本次要求。具体视图、画幅、并发、恢复与一次集中回写只在专项规则维护。
+按[表达规则](references/prompt-language.md)把结构组织成自然正文，保持作者事实和确定程度。真实已采用参考覆盖的外貌与固定布景可省略，神情、夸张表演、动作、必要变化和摄影要求保留；待生成的节点仍需完整描述。模型标记只在执行时按真实绑定映射。
 
-`videoPrompt` 与静态 `prompt.text` 分开，沿用同一人物、场景和连续性；不建立第二份权威正文。视频先锁定画幅与试片／最终画质，参数与音乐独立交付，正文不写时间段、秒数或模型限制。完整动作与升级规则以视频工作流为准。
+硬校验、语义核对和冻结评分各自记录，按证据处理有限局部修复。正常交付使用 seal --brief 取得同版资产绑定，再用 deliver 集中导出并回读；视频规划用 video.mjs finalize。修订、恢复和失败处理遵守 AGENTS 及对应操作合同。
+
+## 长对话接手
+
+正文、已锁定设计、引用、版本与状态从本项目权威 JSON 和实际回执回读。先确认本轮目标、当前 revision、已完成项、未知项和下一步依赖，再读取当前路线。历史总结和旧评分不能替代这些证据。
+
+仅在同一上下文确已读完且仍保留正文时，可用 `rules review --since rules-prompt-001.json` 只返回新增或变更的正文，完整指纹照常记录。规则变更时核对受影响部分。新会话或上下文压缩后重新读取当前路线。交接只带项目路径、版本、已确认要求和未完成项的来源定位；完整 Prompt、图片与回执留在原文件中按需读取。

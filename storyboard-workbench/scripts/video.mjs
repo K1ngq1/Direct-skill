@@ -8,6 +8,7 @@ import { promptHash, validateVisualPlan, validateLocalImage } from './visual.mjs
 import { localFolder } from './visual_state.mjs';
 import { validateSceneBundle } from './export_visual_excel.mjs';
 import { validateGenerationProject } from './generation.mjs';
+import { agentImageSelected, singleRunEnabled } from './single_run.mjs';
 
 const fail = message => { throw new ProjectError(message, 422); };
 const read = filename => JSON.parse(fs.readFileSync(filename, 'utf8'));
@@ -50,6 +51,7 @@ export function validateVideoWorkflow(directory, workflow, { forExport = false }
   if (workflow.title !== undefined) text(workflow.title, '视频规划标题');
   for (const [key, label] of [['generationSettings', '全片视频参数'], ['musicPrompt', '全片音乐Prompt']]) if (workflow[key] !== undefined) text(workflow[key], label);
   for (const key of ['images', 'videoShots', 'timeline', 'pilotVideoShotIds', 'results']) list(workflow[key], key);
+  if (singleRunEnabled(plan) && workflow.results.length) fail('单次自动制作只准备视频节点，不得记录视频生成结果');
   const shotIds = plan.shots.map(shot => shot.id);
   if (workflow.shotPrompts !== undefined) {
     list(workflow.shotPrompts, '修订静帧Prompt'); unique(workflow.shotPrompts.map(item => item.shotId), '修订静帧镜号');
@@ -95,6 +97,7 @@ export function validateVideoWorkflow(directory, workflow, { forExport = false }
     if (!['agent', 'user'].includes(image.selection?.by)) fail(`${image.id}选择来源无效`);
     text(image.selection.reason, `${image.id}选择原因`);
     if (!['pending', 'confirmed'].includes(image.approval?.status) || (image.approval.status === 'confirmed' ? image.approval.by !== 'user' : image.approval.by !== null)) fail(`${image.id}用户确认必须与图片检查和选择分开记录`);
+    if (singleRunEnabled(plan) && image.approval.status === 'pending' && image.selection.selectedAt !== undefined && !agentImageSelected(plan, image)) fail(`${image.id}自动采用须绑定实际图片检查与输出哈希`);
   }
   if (workflow.assetImages !== undefined) {
     list(workflow.assetImages, '资产图片');
@@ -145,17 +148,17 @@ export function validateVideoWorkflow(directory, workflow, { forExport = false }
     if (result.cause !== undefined && !['prompt', 'reference', 'model', 'editing', 'unknown'].includes(result.cause)) fail('视频问题原因无效');
     if (result.cause !== undefined) text(result.evidence, '视频问题归因依据');
   }
-  const pendingImageIds = workflow.images.filter(image => image.review.status !== 'usable' || image.approval.status !== 'confirmed').map(image => image.id);
+  const pendingImageIds = workflow.images.filter(image => image.review.status !== 'usable' || !(image.approval.status === 'confirmed' || agentImageSelected(plan, image))).map(image => image.id);
   return { workflow, project, plan, report, sceneBundle, generation, totalSeconds: workflow.timeline.reduce((sum, row) => sum + row.seconds, 0), pendingImageIds };
 }
 
 export function sealVideoWorkflow(directory, input) {
   const workflow = structuredClone(input);
-  validateVideoWorkflow(directory, workflow);
+  const { pendingImageIds } = validateVideoWorkflow(directory, workflow);
   const output = localFolder(directory, 'video-workflow'), file = path.join(output, revisionName(workflow.revision));
   if (fs.existsSync(file)) fail('本视频规划版本已存在，拒绝覆盖');
   fs.writeFileSync(file, JSON.stringify(workflow, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
-  return { workflow, file };
+  return { workflow, file, pendingImageIds };
 }
 
 export function readVideoWorkflow(directory, filename) {
@@ -164,11 +167,21 @@ export function readVideoWorkflow(directory, filename) {
   return workflow;
 }
 
-const summary = workflow => ({ revision: workflow.revision, counts: { images: workflow.images.length, videoShots: workflow.videoShots.length, timeline: workflow.timeline.length, results: workflow.results.length }, totalSeconds: workflow.timeline.reduce((sum, row) => sum + row.seconds, 0), pendingImageIds: workflow.images.filter(image => image.review.status !== 'usable' || image.approval.status !== 'confirmed').map(image => image.id) });
+const summary = (workflow, pendingImageIds) => ({ revision: workflow.revision, counts: { images: workflow.images.length, videoShots: workflow.videoShots.length, timeline: workflow.timeline.length, results: workflow.results.length }, totalSeconds: workflow.timeline.reduce((sum, row) => sum + row.seconds, 0), pendingImageIds });
 
-export async function finalizeVideoWorkflow(directory, input) {
-  const sealed = sealVideoWorkflow(directory, input);
-  const result = { status: 'sealed', stateSaved: true, exportsUpdated: false, file: sealed.file, ...summary(sealed.workflow) };
+export async function finalizeVideoWorkflow(directory, input, { resumeIdentical = false } = {}) {
+  let sealed;
+  if (resumeIdentical && Number.isSafeInteger(input.revision) && input.revision > 0) {
+    const file = path.join(directory, 'video-workflow', revisionName(input.revision));
+    if (fs.existsSync(file)) {
+      const workflow = read(insideFile(directory, file));
+      if (!isDeepStrictEqual(input, workflow)) fail('已封存的视频规划版本与本次输入冲突');
+      const { pendingImageIds } = validateVideoWorkflow(directory, workflow);
+      sealed = { file, workflow, pendingImageIds };
+    }
+  }
+  sealed ??= sealVideoWorkflow(directory, input);
+  const result = { status: 'sealed', stateSaved: true, exportsUpdated: false, file: sealed.file, ...summary(sealed.workflow, sealed.pendingImageIds) };
   try {
     const { exportVisualProject } = await import('./visual.mjs');
     Object.assign(result, await exportVisualProject(directory, { videoWorkflow: sealed.workflow, deliveryCheck: 'after-export' }));
@@ -266,11 +279,11 @@ async function main() {
     const [command, directory, revision, feedback] = process.argv.slice(2);
     if (!directory || !revision) fail('用法：video.mjs seal/finalize <project> <input.json> | validate/export <project> <revision.json> | bind-excel <project> <revision.json> <existing.xlsx> | feedback <project> <revision.json> <feedback.json|xlsx>');
     let result;
-    if (command === 'seal') { const sealed = sealVideoWorkflow(directory, read(revision)); result = { status: 'sealed', file: sealed.file, ...summary(sealed.workflow) }; }
+    if (command === 'seal') { const sealed = sealVideoWorkflow(directory, read(revision)); result = { status: 'sealed', file: sealed.file, ...summary(sealed.workflow, sealed.pendingImageIds) }; }
     else if (command === 'finalize') { result = await finalizeVideoWorkflow(directory, read(revision)); if (!result.exportsUpdated || result.acceptance?.status !== 'passed') process.exitCode = 1; }
     else {
       const workflow = read(insideFile(directory, revision));
-      if (command === 'validate') { validateVideoWorkflow(directory, workflow); result = { status: 'valid', ...summary(workflow) }; }
+      if (command === 'validate') { const { pendingImageIds } = validateVideoWorkflow(directory, workflow); result = { status: 'valid', ...summary(workflow, pendingImageIds) }; }
       else if (command === 'export' || command === 'bind-excel' && feedback) {
         const { exportVisualProject } = await import('./visual.mjs');
         result = { files: await exportVisualProject(directory, { videoWorkflow: workflow, bindWorkbook: command === 'bind-excel' ? feedback : null }) };

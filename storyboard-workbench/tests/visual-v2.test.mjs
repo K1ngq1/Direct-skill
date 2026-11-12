@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from '../scripts/vendor/exceljs.cjs';
 import { sealPlan, reportVisualProject, reviseVisualPlan, exportVisualProject, importFeedback, dimensionsFor, promptHash } from '../scripts/visual.mjs';
+import { validateGenerationManifest } from '../scripts/generation.mjs';
 import { assetPlanHash, contract } from '../scripts/visual_v2.mjs';
 import { assertRuntimeCapabilities } from '../scripts/runtime.mjs';
 
@@ -128,6 +129,53 @@ function fixture(t, { calibration = false, emptyScene = false, sourceText = null
   const request = (changes, extra = {}) => ({ baseRevision: read(planFile).revision, actor: 'agent', reason: '用户要求定向调整本镜', userRequest: '请只修改指定镜头的画面。', kind: 'edit', shotEdits: [{ id: 'T1', changes }], ...extra });
   return { directory, project, plan, input, originalInput, source, sourceBytes, projectFile, projectBytes, planFile, track, snapshot, revise, exportFiles, request };
 }
+
+test('single-run generated references revise with history and unlock only checked matching assets', t => {
+  const f = fixture(t, { configure(input) {
+    input.run.automation = { mode: 'single-run', userRequest: '自动采用资产后继续', assetSelection: 'agent', imageGeneration: true, videoGeneration: false };
+  } });
+  const bundles = ['character-prompts.json', 'scene-prompts.json'].map(name => read(path.join(f.directory, name)));
+  const tasks = bundles.flatMap(bundle => (bundle.characters ?? bundle.locations).map(entry => {
+    const bytes = Buffer.from('actual fixture bytes ' + entry.assetId), filename = entry.assetId + '.png';
+    fs.writeFileSync(f.track(path.join(f.directory, filename)), bytes);
+    return { id: 'GEN_' + entry.assetId, phase: 'assets', targetType: bundle.characters ? 'character' : 'location', targetId: entry.assetId,
+      promptHash: promptHash(entry.base.text), count: 1, status: 'succeeded', inputReferenceIds: [], output: { path: filename, sha256: promptHash(bytes) },
+      approval: { status: 'pending', by: null }, selection: { by: 'agent', reason: '隔离检查采用', selectedAt: '2026-11-11T00:00:00Z' },
+      review: { status: 'usable', reason: '隔离软件验收证据', reviewer: 'test', outputSha256: promptHash(bytes) } };
+  }));
+  tasks.push(...f.plan.shots.filter(shot => !shot.reuseOf).map(shot => ({ id: 'GEN_' + shot.id, phase: 'storyboards', targetType: 'shot', targetId: shot.id,
+    promptHash: promptHash(shot.prompt.text), count: 1, status: 'planned', inputReferenceIds: [], output: null, approval: { status: 'pending', by: null } })));
+  const manifestFile = f.track(path.join(f.directory, 'generation-manifest.json'));
+  const manifest = { schemaVersion: 1, projectId: f.plan.projectId, sourcePlanHash: promptHash(JSON.stringify(f.plan)), tasks };
+  save(manifestFile, manifest);
+  const references = tasks.filter(task => task.phase === 'assets').map(task => ({ id: 'REF_' + task.targetId, origin: 'generated-selected', assetId: task.targetId,
+    generationTaskId: task.id, ...task.output, userProvided: false, purpose: '自动采用的本项目资产' }));
+  const shotEdits = f.plan.shots.map(shot => {
+    const schema = structuredClone(shot.shotSchema);
+    schema.referenceIds = ['REF_' + shot.locationId];
+    for (const subject of schema.subjects) subject.referenceIds = ['REF_' + subject.assetId];
+    return { id: shot.id, changes: { shotSchema: schema, review: shot.review, semanticReview: shot.semanticReview } };
+  });
+  const changed = f.revise({ baseRevision: 1, actor: 'agent', reason: '绑定实际输出，不修改创作', kind: 'references', references, shotEdits });
+  assert.equal(changed.accepted, true); assert.equal(changed.plan.repairAttempts.length, 0);
+  assert.deepEqual(read(path.join(f.directory, 'visual-revisions/000001.json')).plan.references, []);
+  for (const [index, kind] of ['characters', 'locations'].entries()) {
+    bundles[index].sourcePlanHash = assetPlanHash(changed.plan, kind);
+    save(path.join(f.directory, index ? 'scene-prompts.json' : 'character-prompts.json'), bundles[index]);
+  }
+  manifest.sourcePlanHash = promptHash(JSON.stringify(changed.plan));
+  for (const task of tasks.filter(task => task.phase === 'storyboards')) {
+    const shot = changed.plan.shots.find(shot => shot.id === task.targetId);
+    task.inputReferenceIds = [...shot.shotSchema.referenceIds, ...shot.shotSchema.subjects.flatMap(subject => subject.referenceIds)]; task.status = 'submitted';
+  }
+  save(manifestFile, manifest);
+  assert.equal(validateGenerationManifest(f.directory).storyboardTasks, tasks.filter(task => task.phase === 'storyboards').length);
+  const designChange = structuredClone(shotEdits[0]); designChange.changes.shotSchema.subjects[0].pose = '改成跳跃';
+  assert.throws(() => f.revise({ baseRevision: changed.plan.revision, actor: 'agent', reason: '不允许借换参考改设计', kind: 'references', references, shotEdits: [designChange] }), /不能修改造型/);
+  assert.throws(() => f.revise({ baseRevision: changed.plan.revision, actor: 'agent', reason: '不允许借换参考重写正文', kind: 'references', references, shotEdits: [{ id: shotEdits[0].id, changes: { prompt: { text: '重写全部正文' } } }] }), /不可修改字段/);
+  tasks[0].review.outputSha256 = 'b'.repeat(64); save(manifestFile, manifest);
+  assert.throws(() => validateGenerationManifest(f.directory), /Agent 检查采用|实际检查/);
+});
 
 test('v2 seals the default plan and exports a first-sheet storyboard without choosing shots or rewriting archived state', async t => {
   const f = fixture(t);

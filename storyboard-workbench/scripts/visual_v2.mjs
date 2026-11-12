@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { checkShotSchema } from './project.mjs';
 import { loadRuleSnapshot, assertRuntimeCapabilities } from './runtime.mjs';
+import { singleRunEnabled } from './single_run.mjs';
 
 export const contract = JSON.parse(fs.readFileSync(new URL('../schemas/visual-plan-v2.json', import.meta.url), 'utf8'));
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -89,6 +90,8 @@ export function inspectV2(directory, project, plan, { sealed = true, checkReview
   };
   if (!fields(plan, 'plan', '$')) return summarize(issues, plan);
   fields(plan.run, 'run', '$.run'); fields(plan.spec, 'spec', '$.spec');
+  try { singleRunEnabled(plan); }
+  catch (error) { add('structure', 'AUTOMATION_INVALID', '$.run.automation', error.message, '仅按本次明确授权启用单次自动制作。'); }
   const originals = list(project.shots).map(item => item.id);
   if (plan.sourceSha256 !== project.source?.sha256) add('source', 'SOURCE_MISMATCH', '$.sourceSha256', '计划与归档原稿不一致', '读取正确原稿重新核对，不能改归档来匹配旧稿。');
   try {
@@ -139,7 +142,7 @@ export function inspectV2(directory, project, plan, { sealed = true, checkReview
     if (!object(reference) || !id(reference.id) || !text(reference.purpose)) { add('structure', 'REFERENCE_REQUIRED', '$.references', '参考须有 ID 与实际用途', '登记实际附件，不虚构引用。'); continue; }
     try {
       if (reference.assetId !== undefined && !entities.includes(reference.assetId)) throw new Error('参考绑定的资产不存在');
-      if (reference.origin === 'generated-confirmed') checkGeneratedReference(directory, plan, reference);
+      if (['generated-confirmed', 'generated-selected'].includes(reference.origin)) checkGeneratedReference(directory, plan, reference);
       else {
         const archived = list(project.references).find(item => item.id === reference.id);
         if (!archived || reference.userProvided !== true || (reference.origin && reference.origin !== 'user-provided')) throw new Error('参考不属于本次用户附件');

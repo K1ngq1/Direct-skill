@@ -8,6 +8,7 @@ import ExcelJS from '../scripts/vendor/exceljs.cjs';
 import { sealPlan, promptHash, dimensionsFor, exportVisualProject } from '../scripts/visual.mjs';
 import { contract } from '../scripts/visual_v2.mjs';
 import { validateVideoWorkflow, sealVideoWorkflow, readVideoWorkflow, finalizeVideoWorkflow, importVideoFeedback } from '../scripts/video.mjs';
+import { receiptBridge } from '../scripts/libtv_assets.mjs';
 
 const save = (filename, value) => fs.writeFileSync(filename, JSON.stringify(value, null, 2) + '\n', 'utf8');
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jF7sAAAAASUVORK5CYII=', 'base64');
@@ -68,6 +69,32 @@ function fixture(t, version = 1) {
   const importFeedback = async (value, file) => { const result = await importVideoFeedback(directory, value, file); track(result.file); track(result.markdownFile); return result; };
   return { directory, plan, workflow, track, seal, feedback, importFeedback };
 }
+
+test('single run accepts checked Agent selections without user confirmation and forbids video results', t => {
+  const { directory, plan, workflow, seal, track } = fixture(t, 2);
+  plan.run.automation = { mode: 'single-run', userRequest: '自动检查采用图片，视频不生成', assetSelection: 'agent', imageGeneration: true, videoGeneration: false };
+  save(path.join(directory, 'visual-plan.json'), plan);
+  workflow.sourcePlanHash = promptHash(JSON.stringify(plan));
+  for (const image of workflow.images) {
+    image.review = { status: 'usable', reason: '软件夹具的图片检查记录', reviewer: 'test', outputSha256: image.sha256 };
+    image.selection.selectedAt = '2026-11-11T00:00:00Z';
+  }
+  assert.deepEqual(validateVideoWorkflow(directory, workflow).pendingImageIds, []);
+  delete workflow.images[0].selection.selectedAt;
+  assert.deepEqual(validateVideoWorkflow(directory, workflow).pendingImageIds, [workflow.images[0].id]);
+  workflow.images[0].selection.selectedAt = '2026-11-11T00:00:00Z';
+  const sealed = seal(workflow);
+  assert.deepEqual(sealed.pendingImageIds, []);
+  assert.ok(workflow.images.every(image => image.approval.status === 'pending' && image.approval.by === null));
+  const cli = fileURLToPath(new URL('../scripts/video.mjs', import.meta.url));
+  const run = spawnSync(process.execPath, [cli, 'validate', directory, sealed.file], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(run.status, 0, run.stderr); assert.deepEqual(JSON.parse(run.stdout).pendingImageIds, []);
+  workflow.images[0].review.outputSha256 = 'b'.repeat(64);
+  assert.throws(() => validateVideoWorkflow(directory, workflow), /输出哈希/);
+  workflow.images[0].review.outputSha256 = workflow.images[0].sha256;
+  workflow.results = [{ videoShotId: 'V01', status: 'unknown', attempts: 1, manualEdits: '' }];
+  assert.throws(() => validateVideoWorkflow(directory, workflow), /不得记录视频生成结果/);
+});
 
 test('static revision binds real references and updates prose while preserving the frozen source', async t => {
   const { directory, workflow, track, seal, importFeedback } = fixture(t), original = fs.readFileSync(path.join(directory, 'visual-plan.json'));
@@ -151,6 +178,10 @@ test('finalize seals and delivers once, and reports saved state when Excel expor
   assert.equal(first.acceptance.status, 'passed', JSON.stringify(first.acceptance));
   assert.equal(first.stateSaved, true); assert.equal(first.exportsUpdated, true); assert.equal(first.status, 'delivered');
   const workbook = first.files.find(file => file.endsWith('.xlsx')), bytes = fs.readFileSync(workbook);
+  const recovered = await receiptBridge({ operation: 'canvas-export', directory, projectDirectory: directory, workflowFile: first.file });
+  assert.equal(recovered.acceptance, 'passed');
+  assert.deepEqual(fs.readFileSync(workbook), bytes);
+  await assert.rejects(finalizeVideoWorkflow(directory, { ...workflow, title: '同版本不同内容' }, { resumeIdentical: true }), /冲突/);
   const next = structuredClone(workflow); next.revision++;
   next.shotPrompts = [{ shotId: 'S07a', text: '人物保持站立，目光停在桌面。'.repeat(800), basis: '本次软件样例', references: [] }];
   const failed = await finalizeVideoWorkflow(directory, next); track(failed.file);

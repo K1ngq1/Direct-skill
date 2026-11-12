@@ -6,8 +6,11 @@ import { ProjectError } from './project.mjs';
 import { promptHash, validateVisualPlan, validateLocalImage } from './visual.mjs';
 import { validateCharacterBundle, validateSceneBundle } from './export_visual_excel.mjs';
 import { mediaBatchHostSource } from './media_batch.mjs';
+import { codexImageHostSource } from './generation_codex_host.mjs';
+import { agentImageSelected, userImageConfirmed } from './single_run.mjs';
 export { runConcurrentJobs, runMediaBatch, runMediaBatchAndSummarize, runMediaPipeline, createMediaBatchController, mediaBatchHostSource } from './media_batch.mjs';
 export { createGenerationBatchStore, createGenerationPipelineStore } from './generation_batch_store.mjs';
+export { runCodexImageBatch, runCodexImageStream, codexImageHostSource } from './generation_codex_host.mjs';
 
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const fail = message => { throw new ProjectError(message, 422); };
@@ -91,6 +94,7 @@ function inspectGenerationManifest(directory, manifest, { plan, project }) {
     if (!['pending', 'confirmed', 'rejected'].includes(task.approval?.status)) fail('用户确认状态无效');
     if (task.approval.status === 'pending' ? task.approval.by !== null : task.approval.by !== 'user') fail('资产采用必须由用户确认，不能代为确认');
     if (task.approval.status === 'confirmed' && (task.status !== 'succeeded' || !Number.isFinite(Date.parse(task.approval.confirmedAt)))) fail('用户确认须绑定成功输出及确认时间');
+    if (task.selection?.by === 'agent' && (task.status !== 'succeeded' || !agentImageSelected(plan, task))) fail('Agent 采用须启用单次自动制作并绑定成功图片的实际检查');
     if (task.status === 'succeeded' && !task.output) fail('成功任务缺少输出文件');
     if (['planned', 'submitted'].includes(task.status) && task.output != null) fail('未完成任务不能声称已有输出');
     if (task.output != null) {
@@ -113,8 +117,9 @@ function inspectGenerationManifest(directory, manifest, { plan, project }) {
       const assetTask = manifest.tasks.find(item => item.phase === 'assets' && item.targetId === assetId);
       const references = task.inputReferenceIds.map(id => plan.references.find(ref => ref.id === id));
       if (assetTask) {
-        if (assetTask.status !== 'succeeded' || assetTask.approval.status !== 'confirmed' || assetTask.approval.by !== 'user') fail(`${task.id}所需资产尚未经用户确认`);
-        if (!references.some(ref => ref.origin === 'generated-confirmed' && ref.assetId === assetId && ref.generationTaskId === assetTask.id)) fail(`${task.id}缺少该资产已确认的真实参考`);
+        const selected = agentImageSelected(plan, assetTask);
+        if (assetTask.status !== 'succeeded' || !(userImageConfirmed(assetTask) || selected)) fail(`${task.id}所需资产尚未经用户确认或 Agent 检查采用`);
+        if (!references.some(ref => ref.origin === (selected ? 'generated-selected' : 'generated-confirmed') && ref.assetId === assetId && ref.generationTaskId === assetTask.id)) fail(`${task.id}缺少该资产已确认或采用的真实参考`);
       } else {
         const base = characters.find(entry => entry.assetId === assetId)?.base;
         if (base?.mode !== 'reuse' || !base.referenceIds.some(id => task.inputReferenceIds.includes(id))) fail(`${task.id}所需资产尚无可用图片`);
@@ -122,7 +127,7 @@ function inspectGenerationManifest(directory, manifest, { plan, project }) {
     }
     for (const refId of task.inputReferenceIds) {
       const reference = plan.references.find(item => item.id === refId);
-      if (reference.origin === 'generated-confirmed') validateLocalImage(directory, reference);
+      if (['generated-confirmed', 'generated-selected'].includes(reference.origin)) validateLocalImage(directory, reference);
       else {
         const original = project.references.find(item => item.id === refId);
         validateLocalImage(directory, { path: original?.path, sha256: original?.sha256 });
@@ -136,8 +141,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try {
     const [command, directory, turnId] = process.argv.slice(2);
     if (command === 'host-source') { console.log(mediaBatchHostSource()); process.exit(0); }
+    if (command === 'codex-host-source') { console.log(codexImageHostSource()); process.exit(0); }
     if (command === 'audit-execution' && directory) { console.log(JSON.stringify(await auditGenerationTranscript(directory, turnId), null, 2)); process.exit(0); }
-    if (command !== 'validate' || !directory) fail('用法：generation.mjs validate <project> | audit-execution <rollout.jsonl> [turnId]');
+    if (command !== 'validate' || !directory) fail('用法：generation.mjs validate <project> | host-source | codex-host-source | audit-execution <rollout.jsonl> [turnId]');
     const { assetTasks, storyboardTasks } = validateGenerationManifest(directory);
     console.log(JSON.stringify({ status: 'valid', assetTasks, storyboardTasks }, null, 2));
   } catch (error) { console.error(error.message); process.exitCode = 1; }

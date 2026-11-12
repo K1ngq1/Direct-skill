@@ -98,6 +98,13 @@ function applyFields(target, changes, allowed) {
   }
 }
 
+function withoutReferenceIds(schema) {
+  const copy = structuredClone(schema);
+  delete copy.referenceIds;
+  for (const key of ['subjects', 'props']) for (const row of Array.isArray(copy[key]) ? copy[key] : []) delete row.referenceIds;
+  return copy;
+}
+
 export function changeV2(directory, request, { project, inspect, action = 'revise' }) {
   required(object(request), '修订请求须为对象');
   required(Number.isInteger(request.baseRevision) && request.baseRevision > 0, '缺少baseRevision');
@@ -125,13 +132,18 @@ export function changeV2(directory, request, { project, inspect, action = 'revis
     }
     let next = structuredClone(before), accepted = true, attemptReport = null;
     const explicitReviews = new Set(), affected = new Set();
-    const knownFields = { revise: ['kind', 'shotEdits', 'assetEdits', 'spec', 'sourceResolutions', 'refreshRules', 'userRequest', 'run'], 'add-candidate': ['shotId', 'candidate'], select: ['shotId', 'candidateId'], restore: ['targetRevision'] };
+    const knownFields = { revise: ['kind', 'shotEdits', 'assetEdits', 'spec', 'sourceResolutions', 'refreshRules', 'userRequest', 'run', 'references'], 'add-candidate': ['shotId', 'candidate'], select: ['shotId', 'candidateId'], restore: ['targetRevision'] };
     required(Object.hasOwn(knownFields, action), '未知修订操作');
     for (const key of Object.keys(request)) required(['baseRevision', 'actor', 'reason', ...knownFields[action]].includes(key), `未知请求字段：${key}`);
     const findShot = value => { const shot = next.shots.find(row => row.id === value); required(shot, `镜头不存在：${value}`); return shot; };
     const markReviews = (shotId, changes) => { for (const key of ['review', 'semanticReview']) if (Object.hasOwn(changes, key)) explicitReviews.add(`${shotId}:${key}`); };
     if (action === 'revise') {
-      required(['repair', 'edit', 'review', 'runtime'].includes(request.kind), 'kind须为repair/edit/review/runtime');
+      required(['repair', 'edit', 'review', 'runtime', 'references'].includes(request.kind), 'kind须为repair/edit/review/runtime/references');
+      if (request.kind === 'references') {
+        required(Array.isArray(request.references), '参考修订须提供完整references');
+        required(Object.keys(request).every(key => ['baseRevision', 'actor', 'reason', 'kind', 'references', 'shotEdits'].includes(key)), '参考修订只更新references及关联镜头');
+        next.references = structuredClone(request.references);
+      } else required(request.references === undefined, 'references仅能通过kind:references修订');
       if (request.kind === 'runtime') {
         required(object(request.run) && Object.keys(request.run).length > 0, 'runtime须提供非空run更新');
         required(Object.keys(request).every(key => ['baseRevision', 'actor', 'reason', 'kind', 'run'].includes(key)), 'runtime只能修改run运行记录');
@@ -161,7 +173,8 @@ export function changeV2(directory, request, { project, inspect, action = 'revis
       for (const edit of request.shotEdits ?? []) {
         required(object(edit) && !edited.has(edit.id), '镜头修改条目无效或重复'); edited.add(edit.id);
         const shot = findShot(edit.id);
-        applyFields(shot, edit.changes, request.kind === 'review' ? ['review', 'semanticReview'] : contract.shotEditable);
+        if (request.kind === 'references' && edit.changes?.shotSchema !== undefined) required(same(withoutReferenceIds(shot.shotSchema), withoutReferenceIds(edit.changes.shotSchema)), '参考修订不能修改造型、站位或画面设计；仅更新referenceIds');
+        applyFields(shot, edit.changes, request.kind === 'review' ? ['review', 'semanticReview'] : request.kind === 'references' ? ['shotSchema', 'review', 'semanticReview'] : contract.shotEditable);
         markReviews(edit.id, edit.changes); affected.add(edit.id);
       }
       const editedAssets = new Set();

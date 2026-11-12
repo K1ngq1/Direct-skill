@@ -108,7 +108,7 @@ export function exportVisualMarkdown(plan, project, report = null, context = {})
     if (shot.semanticReview) lines.push('', '### 独立语义核对', '', ...json(shot.semanticReview));
   }
   if (plan.calibration?.length) for (const sample of plan.calibration) lines.push('', `## 人工校准样本 ${sample.id}`, '', sample.text, '', ...reviewLog(sample), '', ...json(sample));
-  for (const [title, value] of [['硬校验记录', report], ['视频工作流与验收记录', context.workflow], ['生成清单与失败记录', context.manifest], ['人物资产记录', context.characterBundle], ['场景资产记录', context.sceneBundle]]) {
+  for (const [title, value] of [['单次制作授权', plan.run?.automation], ['硬校验记录', report], ['视频工作流与验收记录', context.workflow], ['生成清单与失败记录', context.manifest], ['人物资产记录', context.characterBundle], ['场景资产记录', context.sceneBundle]]) {
     if (value) lines.push('', `## ${title}`, '', ...json(value));
   }
   return lines.join('\n') + '\n';

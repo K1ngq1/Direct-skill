@@ -12,9 +12,13 @@ node "storyboard-workbench/scripts/runtime.mjs" rules prompt --adapter codex --m
 
 - `--adapter` 选择宿主：`default/codex/claude-code/workbuddy`；`--model` 独立选择厂商规则，不连接 API、不切换实际模型。省略均为 default，实际未知时不猜。
 - 未知值分别保留请求并以 `ADAPTER_FALLBACK/MODEL_FALLBACK` 告警后回退。已登记文件缺失、越界或损坏直接报错，不以回退掩盖。
-- 基础正文来自现有规则清单的 `core + stages[stage]`；`onDemand` 只登记专项资源，触发条件由 Skill 维护，执行相关任务前必须补读。`all` 和 `canonicalSnapshot` 包含所有新版基础与按需文件，排除 legacy；旧清单不含 onDemand 时行为不变。
+- 基础正文来自清单的 core + stages[stage]；具体操作如 canvas、image-batch 使用 core + tasks[操作名]。onDemand 保存低频专项规则，触发条件由 Skill 维护。all 和 canonicalSnapshot 包含新版基础、操作及按需文件指纹。旧清单缺少 tasks 时沿用原阶段行为。
 - 适配正文按 `default.md → 所选宿主 → 所选模型` 去重加载；model=default 不追加文件。更换适配组合不改变共用规则。
 - `--output` 只创建新记录，完整结果写文件，stdout 为摘要；未给该参数则直接输出完整结果。哈希证明所提供版本，不证明模型已理解。
+
+## 增量复用
+
+同一上下文已实际读完且仍保留上一记录正文时，可追加 `--since <先前rules记录.json>`，仅返回当前路线中新增或哈希变化的正文。snapshot 仍是当前路线的完整指纹，ruleDelivery.reused 列出复用项。新会话或压缩后重新读取当前路线。此选项与规则分块分别使用。保留先前阅读记录，只有指纹的复用项不能证明模型已阅读。
 
 ## 输出与能力观察
 

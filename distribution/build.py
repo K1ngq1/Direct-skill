@@ -21,26 +21,21 @@ description: Turn rough scripts into linked storyboard Prompts, refine their wor
 图片或 MCP 提交由宿主已连接且获本次授权的工具执行；安装不会接通服务或授予生成权限。
 本包提供新文本／Excel／媒体工作流，旧 HTML 网页服务仅保留在开发仓库。
 '''
-README = '''# 导演分镜 Skill 安装包
-
-本目录可直接放入宿主的 skills 目录，无需 Git、仓库历史、资产库或 npm install。
-调用 $storyboard-workbench，提供粗稿脚本、目标时长及已有参考，按 [SKILL](SKILL.md) 完成规划、Prompt、润色、Excel 与获授权的工具提交。
-
-## 环境
-
-Node.js 20+、Python 3.10+。Excel 读取／更新需要 openpyxl，安装命令为 `python -m pip install -r requirements.txt`。
-ExcelJS 已随包提供。首次使用按共用 Skill 运行 doctor；所有项目数据写到用户工作目录。
-已有 MCP／生图服务由宿主连接，缺工具时保留待提交请求；本包不包含账号、密钥或素材。
-
-## 范围与验证状态
-
-程序检查不等于创作质量或真实媒体生成验收；本包未声称跨模型质量提升。
-实际版本与每个文件的 SHA-256 见 package-manifest.json。历史材料、开发测试和旧网页界面不在安装包中。
-'''
-
 
 def git(*args):
     return subprocess.check_output(['git', *args], cwd=ROOT)
+
+
+def package_readme(text, revision, files):
+    def link(match):
+        target = match[1]
+        if target.startswith(('#', 'https:', 'http:', 'mailto:')):
+            return match[0]
+        filename = target.split('#', 1)[0]
+        if filename in files:
+            return match[0]
+        return '](https://github.com/K1ngq1/Direct-skill/blob/' + revision + '/' + target + ')'
+    return re.sub(r'\]\(([^\s)]+)\)', link, text)
 
 
 def build(output, ref='HEAD'):
@@ -62,7 +57,7 @@ def build(output, ref='HEAD'):
                          lambda m: '](https://github.com/K1ngq1/Direct-skill/blob/' + revision + '/storyboard-workbench/tests/fixtures/' + m[1] + ')',
                          files[name].decode('utf-8')).encode('utf-8')
     files['SKILL.md'] = ENTRY.encode('utf-8')
-    files['README.md'] = README.encode('utf-8')
+    files['README.md'] = package_readme(git('show', revision + ':README.md').decode('utf-8'), revision, files).encode('utf-8')
     files['agents/openai.yaml'] = git('show', revision + ':storyboard-workbench/agents/openai.yaml')
     manifest = {'schemaVersion': 1, 'sourceRevision': revision, 'files': [
         {'path': name, 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()} for name, data in sorted(files.items())]}

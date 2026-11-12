@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { runConcurrentJobs } from './media_batch.mjs';
 import { createProcessLock } from './process_lock.mjs';
+import { checkLibTVCurl, transferLibTVFile } from './libtv_upload.mjs';
 
 export function libtvData(response) {
   if (response?.isError) throw Object.assign(new Error(response.content?.filter(part => part.type === 'text').map(part => part.text).join('\n') || 'LibTV MCP 返回错误'), { status: 'failed' });
@@ -93,6 +94,23 @@ export function createLibTVReceiptStore(directory) {
 // File-only boundary: no MCP or media calls, and no conversion of legacy receipt bodies.
 export async function receiptBridge(input) {
   if (!input || !path.isAbsolute(input.directory ?? '')) throw new Error('LibTV 回执目录须为绝对路径');
+  if (input.operation === 'canvas-ready') {
+    const { readCanvasReady } = await import('./libtv_canvas_inputs.mjs');
+    return readCanvasReady(input);
+  }
+  if (input.operation === 'canvas-summary') {
+    const file = path.join(input.directory, 'canvas-summary-' + crypto.randomUUID() + '.json');
+    fs.writeFileSync(file, JSON.stringify(input.summary, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
+    return { path: file };
+  }
+  if (input.operation === 'canvas-export') {
+    const { finalizeVideoWorkflow, readVideoWorkflow } = await import('./video.mjs');
+    if (!path.isAbsolute(input.projectDirectory ?? '')) throw new Error('正式工作簿须指定本轮项目绝对路径');
+    const workflow = readVideoWorkflow(input.projectDirectory, input.workflowFile);
+    const result = await finalizeVideoWorkflow(input.projectDirectory, workflow, { resumeIdentical: true });
+    return { stateSaved: result.stateSaved, exportsUpdated: result.exportsUpdated, acceptance: result.acceptance?.status,
+      revisionFile: result.file, failure: result.exportFailure };
+  }
   const store = createLibTVReceiptStore(input.directory);
   const parseKey = key => {
     const match = typeof key === 'string' && /^([A-Za-z0-9_-]{1,80})(?:\.([a-z_]+(?:\.error)?))?$/.exec(key);
@@ -150,7 +168,7 @@ export async function createLibTVCanvasSession({ projectId, bridge, call, paused
       receipts[key] = result.receipt;
       timing.receiptSaveMs += result.receiptSaveMs ?? 0;
       return result.receipt;
-    } catch (error) { storageFailed = true; throw error; }
+    } catch (error) { storageFailed = true; error.storageFailed = true; throw error; }
   };
   const validate = (name, key, args) => {
     if (!['upload_ticket', 'upload_complete', 'upload_media', 'create_node', 'manage_group'].includes(name)) throw issue('禁止的画布交付工具：' + name, 'failed');
@@ -165,6 +183,7 @@ export async function createLibTVCanvasSession({ projectId, bridge, call, paused
     }
     if (name === 'create_node' && (args.run !== false || !['image', 'video', 'audio', 'text'].includes(args.nodeType))) throw issue('画布节点须显式 run:false，且类型有效', 'failed');
     if (name === 'manage_group' && args.action !== 'create') throw issue('画布交付只允许创建分组', 'failed');
+    if (name === 'manage_group' && args.run !== undefined && args.run !== false) throw issue('画布分组不得执行生成', 'failed');
   };
   const deliver = receipt => {
     if (receipt.status !== 'completed') throw issue(`${receipt.tool} 返回 ${receipt.status}`, receipt.status);
@@ -221,7 +240,8 @@ export async function createLibTVCanvasSession({ projectId, bridge, call, paused
       const receipt = { ...submitted, status, toolStartedAt, toolReturnedAt, finishedAt: toolReturnedAt,
         ...(error ? { error: String(error.message ?? error), ...(error.evidence ? { evidence: error.evidence } : {}) } : { value }) };
       pendingSaves.set(key, { receipt, expected: submitted });
-      await save(key, receipt, submitted);
+      try { await save(key, receipt, submitted); }
+      catch (error) { error.pendingSaveKey = key; throw error; }
       pendingSaves.delete(key);
       return deliver(receipt);
     } finally { active.delete(key); }
@@ -366,10 +386,11 @@ export const libtvAssetsHostSource = () => [runConcurrentJobs, libtvData, discov
 if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === 'host-source') process.stdout.write(`${libtvAssetsHostSource()}\n`);
   else if (process.argv[2] === 'receipts') {
-    const framed = process.argv[3] === '--stdio' && process.stdin.isTTY;
+    const canvas = process.argv[3] === '--canvas-stdio';
+    const framed = canvas || (process.argv[3] === '--stdio' && process.stdin.isTTY);
     let output = '', outputOffset = 0;
     const drain = () => {
-      const end = Math.min(output.length, outputOffset + 48 * 1024);
+      const end = Math.min(output.length, outputOffset + 48 * (canvas ? 128 : 1024));
       let chunk = '';
       for (; outputOffset < end; outputOffset += 48) chunk += '~B64 ' + output.slice(outputOffset, outputOffset + 48) + '\n';
       chunk += outputOffset >= output.length ? '~END\n' : '~MORE\n';
@@ -386,9 +407,11 @@ if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.ar
     let lock, owner;
     const release = () => { if (owner) { lock.release({ owner: owner.owner }); owner = null; } };
     try {
-      if (process.argv[3] === '--stdio') {
+      if (canvas || process.argv[3] === '--stdio') {
         const directory = process.argv[4];
         if (!path.isAbsolute(directory ?? '')) throw new Error('LibTV 回执目录须为绝对路径');
+        const uploadDirectory = process.argv[5], transfers = new Map();
+        if (canvas && !path.isAbsolute(uploadDirectory ?? '')) throw new Error('LibTV 上传目录须为绝对路径');
         fs.mkdirSync(directory, { recursive: true });
         lock = createProcessLock(path.join(directory, '.libtv-receipts.lock'));
         owner = lock.acquire();
@@ -398,16 +421,57 @@ if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.ar
         respond({ ok: true, value: { ready: true, owner: owner.owner } });
         const { createInterface } = await import('node:readline');
         const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+        let partial;
         for await (const line of lines) {
           if (!line.trim()) continue;
           let input;
           try {
             input = JSON.parse(line);
+            if (canvas && input.operation === 'close') {
+              // A broken frame stream can still release ownership without replaying its request.
+              partial = null; output = ''; outputOffset = 0;
+            }
+            if (canvas && Object.hasOwn(input, 'part')) {
+              const { requestId, part, count, data } = input;
+              if (!partial && part === 0) partial = { requestId, count, segments: [] };
+              if (!partial || partial.requestId !== requestId || partial.count !== count || !Number.isSafeInteger(count) || count < 2
+                || partial.segments.length !== part || part >= count || typeof data !== 'string' || data.length > 700) throw new Error('LibTV 输入分段顺序或长度不符');
+              partial.segments.push(data);
+              if (part + 1 < count) continue;
+              input = JSON.parse(partial.segments.join(''));
+              if (input.requestId !== requestId) throw new Error('LibTV 分段请求身份不符');
+              partial = null;
+            } else if (partial) throw new Error('LibTV 输入分段不完整');
             if (input.operation === 'drain') { if (output) drain(); else respond({ ok: false, error: '没有待取回的本地响应' }); continue; }
             if (output) { process.stdout.write('~WAIT\n'); continue; }
-            if (input.operation === 'close') { respond({ requestId: input.requestId, ok: true, value: { closed: true } }); lines.close(); break; }
+            if (input.operation === 'close') {
+              await Promise.all([...transfers.values()].map(entry => entry.pending));
+              release();
+              respond({ requestId: input.requestId, ok: true, value: { closed: true } }); lines.close(); break;
+            }
             if (input.directory && path.resolve(input.directory) !== path.resolve(directory)) throw new Error('不能切换持锁目录');
             lock.assertOwner({ owner: owner.owner });
+            if (canvas && input.operation === 'checkLocal') {
+              respond({ requestId: input.requestId, ok: true, value: await checkLibTVCurl() }); continue;
+            }
+            if (canvas && input.operation === 'transfer') {
+              const id = input.item?.id;
+              if (transfers.has(id) || transfers.size >= 4 || input.allowUpload !== true) throw new Error('上传仍在途、槽位已满或未授权');
+              const entry = { result: null };
+              transfers.set(id, entry);
+              entry.pending = transferLibTVFile(uploadDirectory, input.item, input.ticket, {
+                allowUpload: true, recoverDnsFailure: input.recoverDnsFailure
+              }).then(proof => { entry.result = { proof }; }, error => {
+                entry.result = { error: error.message, returned: error.returned, storageFailed: error.storageFailed };
+              });
+              respond({ requestId: input.requestId, ok: true, value: { started: true } }); continue;
+            }
+            if (canvas && input.operation === 'transfer-result') {
+              const entry = transfers.get(input.id);
+              if (!entry) throw new Error('找不到本进程内的上传；从原票据与落盘回执恢复');
+              if (entry.result) transfers.delete(input.id);
+              respond({ requestId: input.requestId, ok: true, value: entry.result ?? { pending: true } }); continue;
+            }
             const value = await receiptBridge({ ...input, directory });
             const result = framed && input.operation === 'write' ? { saved: true, receiptSavedAt: value.receipt.receiptSavedAt, receiptSaveMs: value.receiptSaveMs } : value;
             respond({ requestId: input.requestId, ok: true, value: result });

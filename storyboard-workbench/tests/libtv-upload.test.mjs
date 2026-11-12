@@ -115,6 +115,27 @@ test('HTTP errors, network failures and short writes retain unknown evidence and
   }
 });
 
+test('explicit DNS recovery uses the same single-part ticket once and retains original evidence', async t => {
+  const f = fixture(t), calls = mockCurl(t, call => call.finish(calls.length === 1 ? { code: 6, status: 0, bytes: 0 } : {}));
+  await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true }), /exit=6/);
+  const errorFile = path.join(f.receiptDirectory, 'S01.curl_error.json'), original = fs.readFileSync(errorFile);
+  await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true }), /不自动重传/);
+  const result = await transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true, recoverDnsFailure: true });
+  assert.equal(result.status, 200); assert.equal(calls.length, 2);
+  assert.deepEqual(fs.readFileSync(errorFile), original);
+  assert.equal((await transferLibTVFile(f.directory, f.item, f.ticket)).reused, true);
+});
+
+test('DNS recovery cannot unlock timeouts, HTTP errors, missing evidence or multipart requests', async t => {
+  for (const response of [{ code: 28, status: 0 }, { status: 403 }]) await t.test(JSON.stringify(response), async t => {
+    const f = fixture(t), calls = mockCurl(t, call => call.finish(response));
+    await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true, recoverDnsFailure: true }), /须有/);
+    await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true }));
+    await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true, recoverDnsFailure: true }), /不自动重传/);
+    assert.equal(calls.length, 1);
+  });
+});
+
 test('a slow upload does not serialize a second file, while same-item concurrent PUT is rejected', async t => {
   const f = fixture(t);
   let release, started;
@@ -133,6 +154,21 @@ test('a slow upload does not serialize a second file, while same-item concurrent
   } finally { release(); await first; }
 });
 
+test('a transient completion-save failure recovers the same PUT under its original lock', async t => {
+  const f = fixture(t), calls = mockCurl(t), originalOpen = fs.openSync;
+  let failOnce = true;
+  t.mock.method(fs, 'openSync', (filename, ...args) => {
+    if (failOnce && String(filename).endsWith('curl_completed.json')) {
+      failOnce = false; throw new Error('temporary file access failure');
+    }
+    return originalOpen(filename, ...args);
+  });
+  const completed = await transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true });
+  assert.equal(completed.status, 200);
+  assert.equal((await transferLibTVFile(f.directory, f.item, f.ticket)).reused, true);
+  assert.equal(calls.length, 1);
+});
+
 test('completed proof is bound to the original project and ticket; failed local save preserves returned proof', async t => {
   const f = fixture(t), calls = mockCurl(t);
   const originalOpen = fs.openSync;
@@ -141,7 +177,7 @@ test('completed proof is bound to the original project and ticket; failed local 
     return originalOpen(filename, ...args);
   });
   let returned;
-  await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true }), error => { returned = error.returned; return Boolean(returned?.proof); });
+  await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true }), error => { returned = error.returned; return Boolean(returned?.proof && error.storageFailed); });
   patch.mock.restore();
   await assert.rejects(transferLibTVFile(f.directory, f.item, f.ticket, { allowUpload: true }), /不自动重传/);
   await createLibTVReceiptStore(f.receiptDirectory).writeReceipt(f.item, 'curl_completed', returned, { exclusive: true });

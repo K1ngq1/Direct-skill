@@ -8,6 +8,7 @@ import { exportVisualExcel, exportCharacterExcel, exportSceneExcel, exportVisual
 import { inspectV2, sourceHashV2, parseFailure, summarize, issue, assetPlanHash } from './visual_v2.mjs';
 import { initializeV2, freezeV2, saveInitialV2, changeV2, localFolder } from './visual_state.mjs';
 import { validateLocalImage } from './local_image.mjs';
+import { agentImageSelected, userImageConfirmed } from './single_run.mjs';
 export { validateLocalImage } from './local_image.mjs';
 
 export const dimensions = [
@@ -56,7 +57,8 @@ function checkGeneratedReference(directory, plan, reference, suppliedManifest) {
   const assets = plan.productionInventory[task.targetType === 'character' ? 'characters' : 'locations'];
   if (!assets.some(asset => asset.id === reference.assetId)) fail('生成参考类型与资产映射不一致');
   if (reference.userProvided !== false) fail('生成参考不得伪装为用户原始附件');
-  if (task.status !== 'succeeded' || task.approval?.status !== 'confirmed' || task.approval.by !== 'user' || !Number.isFinite(Date.parse(task.approval.confirmedAt))) fail('生成参考必须成功且经用户确认');
+  const adopted = reference.origin === 'generated-selected' ? agentImageSelected(plan, task) : userImageConfirmed(task);
+  if (task.status !== 'succeeded' || !adopted) fail('生成参考必须成功且经用户确认，或在单次自动制作中由 Agent 检查采用');
   if (reference.path !== task.output?.path || reference.sha256 !== task.output?.sha256) fail('生成参考与已确认输出不一致');
   validateLocalImage(directory, reference);
 }
@@ -168,7 +170,7 @@ export function validateVisualPlan(directory, plan = read(planFile(directory)), 
   for (const reference of plan.references) {
     id(reference.id, '参考ID');
     string(reference.purpose, '参考用途');
-    if (reference.origin === 'generated-confirmed') {
+    if (['generated-confirmed', 'generated-selected'].includes(reference.origin)) {
       checkGeneratedReference(directory, plan, reference, generationManifest);
       if (!assets.includes(reference.assetId)) fail('生成参考资产不存在');
       continue;

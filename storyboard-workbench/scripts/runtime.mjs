@@ -37,6 +37,8 @@ function readManifest(skillRoot) {
   if (manifest?.schemaVersion !== 1 || typeof manifest.rulesVersion !== 'string' || !manifest.rulesVersion.trim() ||
       !paths(manifest.core) || !manifest.core.length || !paths(manifest.scripts) || !manifest.scripts.length ||
       (Object.hasOwn(manifest, 'onDemand') && !paths(manifest.onDemand)) ||
+      (Object.hasOwn(manifest, 'tasks') && (!manifest.tasks || typeof manifest.tasks !== 'object' || Array.isArray(manifest.tasks) ||
+        Object.entries(manifest.tasks).some(([name, files]) => !/^[a-z][a-z0-9-]*$/.test(name) || stages.includes(name) || name === 'all' || !paths(files) || !files.length))) ||
       !manifest.stages || Object.keys(manifest.stages).length !== stages.length || stages.some(stage => !paths(manifest.stages[stage]))) {
     throw failure('structure', manifestPath, '规则清单的版本、core、stages、onDemand 或 scripts 无效。', '恢复有效的随包规则清单；阶段必须为 ingest/plan/prompt/review/export/legacy，onDemand 可省略或为路径数组。', 'RULE_MANIFEST_INVALID');
   }
@@ -44,9 +46,10 @@ function readManifest(skillRoot) {
 }
 
 export function loadRules({ skillRoot = defaultRoot, stage = 'all' } = {}) {
-  if (stage !== 'all' && !stages.includes(stage)) throw failure('unsupported', 'stage', `不支持的规则阶段：${stage}`, `选择 all 或 ${stages.join('/')}。`, 'RULE_STAGE_UNSUPPORTED');
   const { manifest, bytes } = readManifest(skillRoot);
-  const names = [...new Set([manifestPath, ...manifest.core, ...(stage === 'all' ? [...stages.filter(name => name !== 'legacy').flatMap(name => manifest.stages[name]), ...(manifest.onDemand ?? [])] : manifest.stages[stage])])].sort();
+  const task = Object.hasOwn(manifest.tasks ?? {}, stage) ? manifest.tasks[stage] : null;
+  if (stage !== 'all' && !stages.includes(stage) && !task) throw failure('unsupported', 'stage', `不支持的规则阶段：${stage}`, `选择 all、${stages.join('/')} 或清单中已登记的 tasks。`, 'RULE_STAGE_UNSUPPORTED');
+  const names = [...new Set([manifestPath, ...manifest.core, ...(stage === 'all' ? [...stages.filter(name => name !== 'legacy').flatMap(name => manifest.stages[name]), ...(manifest.onDemand ?? []), ...Object.values(manifest.tasks ?? {}).flat()] : task ?? manifest.stages[stage])])].sort();
   const files = names.map(relative => {
     const content = relative === manifestPath ? bytes : fs.readFileSync(localFile(skillRoot, relative));
     if (relative.endsWith('.json')) parseJson(content, relative);
@@ -106,7 +109,7 @@ function chunkRules(loaded, limit, selected) {
     ruleDelivery: { mode: 'chunked', ruleChunkChars: limit, index: selected, count: chunks.length, chunks, parts: bodies[selected - 1], unit: 'UTF-16 code units', note: '只限制本块规则正文；元数据及会话历史不计入。全部块读完后再执行，原文件正文未删减。' } };
 }
 
-export function loadRuntimeRules({ skillRoot = defaultRoot, stage = 'all', adapter = 'default', model = 'default', observations = {}, ruleChunkChars, chunk } = {}) {
+export function loadRuntimeRules({ skillRoot = defaultRoot, stage = 'all', adapter = 'default', model = 'default', observations = {}, ruleChunkChars, chunk, since } = {}) {
   const loaded = loadRules({ skillRoot, stage }), adapterManifestPath = 'adapters/manifest.json';
   const bytes = fs.readFileSync(localFile(skillRoot, adapterManifestPath)), manifest = parseJson(bytes, adapterManifestPath);
   const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -140,6 +143,21 @@ export function loadRuntimeRules({ skillRoot = defaultRoot, stage = 'all', adapt
       manifest: { path: adapterManifestPath, sha256: sha256(bytes) }, files, warnings },
     run
   };
+  if (since !== undefined) {
+    if (ruleChunkChars !== undefined || chunk !== undefined) throw failure('structure', 'since', '增量读取与分块读取须分别使用。', '本轮选择 since 或规则分块。', 'RULE_SINCE_INVALID');
+    const priorFiles = since?.snapshot?.files ?? since?.files;
+    const priorAdapters = since?.adaptation?.files ?? [];
+    const valid = rows => Array.isArray(rows) && rows.every(row => row && typeof row.path === 'string' && /^[a-f0-9]{64}$/.test(row.sha256 ?? ''));
+    if (!valid(priorFiles) || !valid(priorAdapters)) throw failure('structure', 'since', '先前规则记录缺少有效文件指纹。', '引用当前上下文确已读完的完整 rules 记录。', 'RULE_SINCE_INVALID');
+    const reused = [];
+    const changed = (rows, prior, scope) => rows.filter(row => {
+      if (!prior.some(old => old.path === row.path && old.sha256 === row.sha256)) return true;
+      reused.push({ scope, path: row.path, sha256: row.sha256 }); return false;
+    });
+    return { ...result, files: changed(result.files, priorFiles, 'rules'),
+      adaptation: { ...result.adaptation, files: changed(result.adaptation.files, priorAdapters, 'adaptation') },
+      ruleDelivery: { mode: 'delta', reused, note: '仅在同一上下文已实际读完且仍保留正文时复用；新会话或压缩后重读当前任务规则。指纹不是阅读证据。' } };
+  }
   if (chunk !== undefined && ruleChunkChars === undefined) throw failure('structure', 'chunk', 'chunk须与ruleChunkChars共同指定。', '未给预算时沿用完整规则输出。', 'RULE_CHUNK_INVALID');
   return ruleChunkChars === undefined ? result : chunkRules(result, ruleChunkChars, chunk === undefined ? 1 : chunk);
 }
@@ -210,8 +228,8 @@ function main(args) {
     const stage = rest[0], options = {};
     for (let index = 1; index < rest.length; index += 2) {
       const flag = rest[index], value = rest[index + 1], name = flag.slice(2);
-      if (!['--adapter', '--model', '--output', '--observations', '--rule-chunk-chars', '--chunk'].includes(flag) || Object.hasOwn(options, name) || !value || value.startsWith('--')) {
-        throw failure('unsupported', 'arguments', `无效、重复或缺值的参数：${flag}`, '使用 --adapter/--model/--output/--observations/--rule-chunk-chars/--chunk；每项最多一次，顺序不限。', 'RULE_ARGUMENT_INVALID');
+      if (!['--adapter', '--model', '--output', '--observations', '--rule-chunk-chars', '--chunk', '--since'].includes(flag) || Object.hasOwn(options, name) || !value || value.startsWith('--')) {
+        throw failure('unsupported', 'arguments', `无效、重复或缺值的参数：${flag}`, '使用 --adapter/--model/--output/--observations/--since/--rule-chunk-chars/--chunk；每项最多一次，顺序不限。', 'RULE_ARGUMENT_INVALID');
       }
       options[name] = value;
     }
@@ -221,7 +239,8 @@ function main(args) {
       if (!/^[1-9]\d*$/u.test(options[name]) || !Number.isSafeInteger(Number(options[name]))) throw failure('structure', name, `${name}须为正安全整数。`, '提供不带小数或符号的十进制整数。', 'RULE_CHUNK_INVALID');
       return Number(options[name]);
     };
-    const loaded = loadRuntimeRules({ stage, adapter: options.adapter, model: options.model, observations, ruleChunkChars: numeric('rule-chunk-chars'), chunk: numeric('chunk') });
+    const since = options.since ? parseJson(fs.readFileSync(options.since), options.since) : undefined;
+    const loaded = loadRuntimeRules({ stage, adapter: options.adapter, model: options.model, observations, ruleChunkChars: numeric('rule-chunk-chars'), chunk: numeric('chunk'), since });
     result = { status: 'provided', stage, providedAt: new Date().toISOString(), ...loaded,
       canonicalSnapshot: stage === 'all' ? loaded.snapshot : loadRuleSnapshot(),
       note: 'files/snapshot 是共用阶段规则，canonicalSnapshot 是全规则版本，不因适配选择改变；adaptation.files 按 default、宿主、模型顺序提供差异说明。能力只使用显式观察，未观察项为 unknown。分块时完整正文按 ruleDelivery.parts 逐块读取。提供不代表 Agent 已阅读、理解或平台实测通过。' };
@@ -231,9 +250,9 @@ function main(args) {
       catch (error) { throw failure('runtime', target, error.code === 'EEXIST' ? '输出文件已存在，拒绝覆盖。' : error.message, '选择新的记录文件名，并确保父目录已存在。', error.code === 'EEXIST' ? 'RULE_OUTPUT_EXISTS' : 'RULE_OUTPUT_WRITE'); }
       result = { status: 'provided', output: target, stage, snapshot: loaded.snapshot, canonicalSnapshot: result.canonicalSnapshot,
         adaptation: { ...loaded.adaptation, files: loaded.adaptation.files.map(({ path: name, sha256: digest }) => ({ path: name, sha256: digest })) }, run: loaded.run,
-        ...(loaded.ruleDelivery ? { ruleDelivery: { ...loaded.ruleDelivery, parts: loaded.ruleDelivery.parts.map(({ text, ...part }) => part) } } : {}) };
+        ...(loaded.ruleDelivery ? { ruleDelivery: { ...loaded.ruleDelivery, ...(loaded.ruleDelivery.parts ? { parts: loaded.ruleDelivery.parts.map(({ text, ...part }) => part) } : {}) } } : {}) };
     }
-  } else throw failure('unsupported', 'command', '用法：runtime.mjs doctor [project] | rules <stage> [--adapter <ID>] [--model <ID>] [--observations <file>] [--rule-chunk-chars <N>] [--chunk <N>] [--output <new-file>]', '按用法运行；默认不识别宿主，未指定适配使用 default。doctor 不写文件，rules 仅在明确指定新文件时写入。');
+  } else throw failure('unsupported', 'command', '用法：runtime.mjs doctor [project] | rules <stage|task> [--adapter <ID>] [--model <ID>] [--observations <file>] [--since <prior-record.json>] [--rule-chunk-chars <N>] [--chunk <N>] [--output <new-file>]', '按用法运行；默认不识别宿主，未指定适配使用 default。doctor 不写文件，rules 仅在明确指定新文件时写入。');
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
 }
 if (typeof process !== 'undefined' && process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

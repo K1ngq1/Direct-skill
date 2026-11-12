@@ -482,6 +482,35 @@ function fixture(t) {
 }
 const envelope = source => ({ status: 'returned', receipt: { path: source }, callStartedAt: new Date().toISOString(), toolReturnedAt: new Date().toISOString() });
 
+for (const outcome of ['saved', 'missing-file', 'conflicting-capture', 'paused']) {
+  test(`a lost finalization response reconciles the original exactly once: ${outcome}`, async t => {
+    const { directory, source } = fixture(t), jobs = [job('A'), job('B', ['A'])];
+    const store = createGenerationPipelineStore(directory, jobs, { ...batch, concurrency: 1 });
+    const submitted = [], report = {};
+    const results = await runMediaBatch(jobs, {
+      ...store, report,
+      execute: entry => { submitted.push(entry.id); return { path: source }; },
+      finalize: id => {
+        const saved = store.finalize(id);
+        if (id !== 'A') return saved;
+        if (outcome === 'paused') store.setControl({ paused: true });
+        if (outcome === 'missing-file') fs.unlinkSync(path.join(directory, saved.output.path));
+        if (outcome === 'conflicting-capture') {
+          const capture = path.join(directory, 'captures', 'A.json');
+          fs.writeFileSync(capture, JSON.stringify({ ...JSON.parse(fs.readFileSync(capture, 'utf8')), payloadHash: 'different' }));
+        }
+        throw new Error('response lost');
+      }
+    });
+    assert.deepEqual(submitted, outcome === 'saved' ? ['A', 'B'] : ['A']);
+    assert.equal(report.finalizationChecks.length, 1);
+    assert.equal(report.finalizationChecks[0].outcome, ['saved', 'paused'].includes(outcome) ? 'verified' : 'unresolved');
+    assert.equal(Boolean(report.finalizationChecks[0].resumedAt), outcome === 'saved');
+    assert.equal(results[1].status, outcome === 'saved' ? 'succeeded' : outcome === 'paused' ? 'paused' : 'blocked');
+    if (outcome === 'conflicting-capture') assert.throws(() => store.snapshot(), /冲突/);
+  });
+}
+
 test('durable timeout handoff delivers saved files and permits only the original returned receipt to recover', { timeout: 3000 }, async t => {
   const { directory, source } = fixture(t), jobs = [job('A'), job('B'), job('C', ['A'])];
   const store = createGenerationPipelineStore(directory, jobs, batch);

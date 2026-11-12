@@ -300,6 +300,7 @@ test('node delivery refuses generation, upgrades, export execution, and any run 
   const mock = fakeHost();
   const session = await createLibTVCanvasSession({ projectId, bridge: mock.bridge, call: mock.call, paused: false });
   for (const run of [true, undefined, null, 'false']) await assert.rejects(session.savedCall('create_node', 'S01.node', { ...nodeArgs('S01'), run }));
+  await assert.rejects(session.savedCall('manage_group', 'S01.group', { projectId, action: 'create', run: true }), /不得执行生成/);
   for (const tool of ['generation_submit', 'generate_image', 'generate_video', 'generate_audio', 'upgrade_video', 'export_project', 'prepare_project_delivery']) {
     await assert.rejects(session.savedCall(tool, 'S01.node', nodeArgs('S01')));
   }
