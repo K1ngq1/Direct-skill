@@ -28,4 +28,4 @@ jobs:
           release/storyboard-workbench.zip.sha256
           distribution/install.py
           --title "Storyboard Skill $GITHUB_REF_NAME"
-          --notes "Standalone runtime only. No Git clone, private assets, tests, Git history or browser UI. Requires Python 3.10+, Node 20+ and openpyxl. Connected MCP/image tools remain host-managed."
+          --notes "Standalone runtime only. No Git clone, private assets, tests, Git history or browser UI. Requires Python 3.10+, Node 20+ and openpyxl. The installer configures LibTV MCP in Codex and guides account authorization (Codex CLI required). Use --skip-mcp for files only or --mcp-only to retry setup. Other hosts and image tools remain host-managed."

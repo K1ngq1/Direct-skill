@@ -30,15 +30,24 @@ curl -fsSL https://github.com/K1ngq1/Direct-skill/releases/latest/download/insta
 
 安装器会下载独立运行包，校验 ZIP 和逐文件 SHA-256，安装到 $CODEX_HOME/skills/storyboard-workbench；未设置 CODEX_HOME 时使用 ~/.codex/skills/storyboard-workbench。ExcelJS 已随包提供。已有同名安装会保留，并提示安装路径冲突。
 
-其他宿主可用 --dest 指定其 skills 父目录，例如在已下载的安装器旁运行下面的命令。
+默认安装随后调用 PATH 中的 Codex CLI，将 `https://mcp.liblib.tv/mcp` 注册为 LibTV MCP，并按需打开浏览器登录。用户使用自己的 LibTV 账号完成授权；安装器不携带账号或令牌，不运行媒体生成。已连接相同地址时复用原配置，名称冲突或禁用状态保留原样并报告。CLI 报告已保存凭据后，重启 Codex 或开启新会话；首次实际使用仍由 LibTV `doctor` 核对连接与当前权限。
+
+只需文字与 Excel 时，可跳过 MCP。已经装好 Skill 的用户可单独补配 MCP，连接失败也用此命令重试，不必覆盖已有 Skill。[下载 install.py](https://github.com/K1ngq1/Direct-skill/releases/latest/download/install.py) 后运行：
+
+~~~text
+python install.py --skip-mcp
+python install.py --mcp-only
+~~~
+
+默认 MCP 配置需要 Codex CLI 可用。MCP 配置或登录失败时，已安装文件保留，安装器退出码为 2；Skill 文件安装失败时退出码为 1。其他宿主可用 --dest 指定其 skills 父目录；目标不是 Codex 默认目录时只安装文件，不修改 Codex 配置。
 
 ~~~text
 python install.py --dest "<宿主的skills目录>"
 ~~~
 
-也可下载[独立 ZIP](https://github.com/K1ngq1/Direct-skill/releases/latest/download/storyboard-workbench.zip)，将其中的 storyboard-workbench 文件夹放入对应 skills 目录。[全部发布文件](https://github.com/K1ngq1/Direct-skill/releases/latest)
+也可下载[独立 ZIP](https://github.com/K1ngq1/Direct-skill/releases/latest/download/storyboard-workbench.zip)，将其中的 storyboard-workbench 文件夹放入对应 skills 目录。手动解压不会配置 MCP；Codex 用户再运行 `python install.py --mcp-only`，其他宿主按自己的 MCP 入口连接。[安装器与全部发布文件](https://github.com/K1ngq1/Direct-skill/releases/latest)
 
-**版本请以安装包的 `package-manifest.json` 为准。** 当前工作区的规则精简和执行优化仍待发布，Release 安装命令取得的是已发布版本。
+**版本请以安装包的 `package-manifest.json` 为准。** 当前安装器的 LibTV 自动配置改动尚待发布，Release 安装命令取得的是已发布版本。
 
 ## 2. 第一次使用
 
@@ -96,7 +105,7 @@ Agent 负责创作与视觉判断，本地脚本负责确定性的文件、版�
 
 ### 一次完成图片制作和视频节点准备
 
-先在宿主中连接可用的图片工具与 LibTV MCP，并完成账户授权，再提供脚本。
+先确认宿主中的图片工具可用，且已通过安装器或宿主完成 LibTV MCP 账号授权，再提供脚本。
 
 ~~~text
 按单次自动制作模式处理这份脚本。
@@ -146,7 +155,9 @@ Agent 负责创作与视觉判断，本地脚本负责确定性的文件、版�
 | WorkBuddy 开发仓库 | .codebuddy/skills/storyboard-workbench/ |
 | 其他宿主 | 显式读取共用 Skill，选择 default 适配 |
 
-开发仓库的薄入口依赖完整目录，独立 ZIP 包已包含其运行资源。宿主使用已有模型配置，图片或 MCP 服务需要在宿主中另行连接。安装器处理 Skill 文件，账户、密钥、额度与媒体授权由使用环境提供。[平台适配说明](storyboard-workbench/adapters/README.md)
+开发仓库的薄入口依赖完整目录，独立 ZIP 包已包含其运行资源。安装器默认自动配置 Codex 的 LibTV MCP；其他宿主的 MCP 及图片工具仍通过各自入口连接。宿主使用已有模型配置，账户、密钥、额度与媒体授权由使用环境提供。[平台适配说明](storyboard-workbench/adapters/README.md)
+
+包内已包含 Humanizer-zh 中文润色规则、适配后的导演规则和 ExcelJS，并保留其许可证；分镜流程按需读取，无需用户另装这些上游项目。安装包只收录明确列入发布清单的文件，不会复制作者电脑上的其他全局 Skill、插件、账号配置或私有素材。Humanizer-zh 在本包中是共用规则资源，不会另行注册为全局 Skill。
 
 ## 范围与验证状态
 

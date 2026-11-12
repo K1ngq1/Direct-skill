@@ -13,6 +13,10 @@ node "storyboard-workbench/scripts/runtime.mjs" doctor
 node "storyboard-workbench/scripts/runtime.mjs" rules plan --adapter codex
 ```
 
+## LibTV MCP 安装
+
+独立包安装器默认在 Codex skills 目录安装后，用 `codex mcp add` 注册 LibTV 远程地址，按需用 `codex mcp login` 引导用户授权。已有相同地址时复用配置，冲突或禁用状态不覆盖；`--skip-mcp` 只装文件，`--mcp-only` 为已有安装补配或恢复登录。自定义非 Codex 目标目录只装文件。依赖、退出状态与命令见[安装说明](../../README.md#1-安装)。CLI 报告已保存凭据不代表实时可用；重启或新开会话后，首次 LibTV 请求仍先调用 `doctor`。
+
 ## 执行差异与证据
 
 - 用本会话已有文件和终端工具执行共用脚本；写入、网络与工具操作仍受实际宿主权限约束，不因 Skill 声明就视为可用。

@@ -18,7 +18,7 @@ description: Turn rough scripts into linked storyboard Prompts, refine their wor
 
 先读取[执行约束](AGENTS.md)和唯一[创作流程](storyboard-workbench/SKILL.md)，按阶段继续。
 本目录是独立安装包根目录。资源与脚本相对路径从这里定位，执行命令时换成绝对路径；项目和输出放在用户工作目录。
-图片或 MCP 提交由宿主已连接且获本次授权的工具执行；安装不会接通服务或授予生成权限。
+图片或 MCP 提交由宿主已连接且获本次授权的工具执行；安装器可配置 Codex 的 LibTV MCP 并引导用户授权，手动解压不会配置连接。安装不授予媒体生成权限。
 本包提供新文本／Excel／媒体工作流，旧 HTML 网页服务仅保留在开发仓库。
 '''
 

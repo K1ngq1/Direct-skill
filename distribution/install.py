@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -20,6 +22,7 @@ RELEASE_URL = (
     "https://github.com/K1ngq1/Direct-skill/releases/latest/download/"
     "storyboard-workbench.zip"
 )
+LIBTV_URL = "https://mcp.liblib.tv/mcp"
 HASH_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {
     prefix + str(number) for prefix in ("COM", "LPT") for number in range(1, 10)
@@ -153,6 +156,52 @@ def install(archive, checksum, destination):
     return target
 
 
+def setup_libtv_mcp():
+    """Use the host CLI so Codex owns configuration and account credentials."""
+    executable = shutil.which("codex")
+    if executable is None:
+        raise RuntimeError("Codex CLI is not on PATH. Install it, then run this installer with --mcp-only.")
+
+    def servers():
+        result = subprocess.run(
+            [executable, "mcp", "list", "--json"], check=True, capture_output=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        data = json.loads(result.stdout)
+        if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
+            raise ValueError("Invalid server list from Codex CLI")
+        return data
+
+    configured = servers()
+    matching = [item for item in configured
+                if item.get("transport", {}).get("url", "").rstrip("/") == LIBTV_URL]
+    if matching:
+        server = next((item for item in matching if item.get("enabled", True)), matching[0])
+        name = server.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise ValueError("Cannot safely reuse this LibTV server name; existing configuration was preserved.")
+        if not server.get("enabled", True):
+            raise ValueError("Existing LibTV MCP is disabled; enable it in Codex, then retry --mcp-only.")
+        print("Reusing existing LibTV MCP: " + name, flush=True)
+    else:
+        if any(item.get("name") == "libtv" for item in configured):
+            raise ValueError("MCP name 'libtv' already points elsewhere; existing configuration was preserved.")
+        name = "libtv"
+        print("Registering LibTV MCP: " + LIBTV_URL, flush=True)
+        subprocess.run([executable, "mcp", "add", name, "--url", LIBTV_URL], check=True)
+        server = next((item for item in servers() if item.get("name") == name), {})
+
+    # Adding an OAuth server may already complete login; do not open it twice.
+    if server.get("auth_status") not in ("o_auth", "bearer_token"):
+        print("Complete LibTV account authorization in the browser opened by Codex.", flush=True)
+        subprocess.run([executable, "mcp", "login", name], check=True)
+        server = next((item for item in servers() if item.get("name") == name), {})
+    if server.get("auth_status") not in ("o_auth", "bearer_token"):
+        raise RuntimeError("LibTV MCP was configured, but Codex did not confirm stored credentials.")
+    print("LibTV MCP configured; Codex reports stored account credentials.")
+    print("Restart Codex or open a new chat. The first LibTV task must check live readiness with doctor.")
+
+
 def main(argv=None):
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -160,10 +209,18 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dest", type=Path, help="Skills parent directory")
     parser.add_argument("--archive", type=Path, help="Local ZIP with adjacent .zip.sha256")
+    mcp_options = parser.add_mutually_exclusive_group()
+    mcp_options.add_argument("--skip-mcp", action="store_true", help="Install Skill files without configuring MCP")
+    mcp_options.add_argument("--mcp-only", action="store_true", help="Configure LibTV in Codex without reinstalling the Skill")
     arguments = parser.parse_args(argv)
+    if arguments.mcp_only and (arguments.archive is not None or arguments.dest is not None):
+        parser.error("--mcp-only cannot be combined with --archive or --dest")
+    if arguments.mcp_only:
+        return configure_mcp()
+    codex_destination = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "skills"
     destination = arguments.dest
     if destination is None:
-        destination = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))) / "skills"
+        destination = codex_destination
     try:
         if arguments.archive is not None:
             archive = arguments.archive.read_bytes()
@@ -181,7 +238,24 @@ def main(argv=None):
         return 1
     print("Installed successfully: " + str(target))
     print("Runtime prerequisites: Python 3.10+, Node.js 20+, and openpyxl.")
-    print("This installer does not install runtimes, pip packages, or change other settings.")
+    print("This installer does not install runtimes or pip packages.")
+    if arguments.skip_mcp:
+        print("LibTV MCP setup skipped (--skip-mcp).")
+    elif destination.expanduser().resolve() != codex_destination.expanduser().resolve():
+        print("Custom skills directory: configure MCP in that host; Codex settings were not changed.")
+    else:
+        return configure_mcp()
+    return 0
+
+
+def configure_mcp():
+    try:
+        setup_libtv_mcp()
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, KeyboardInterrupt) as error:
+        print("LibTV MCP setup incomplete: " + str(error), file=sys.stderr)
+        print("Skill files were not rolled back or overwritten. Retry with --mcp-only after resolving the issue.",
+              file=sys.stderr)
+        return 2
     return 0
 
 
