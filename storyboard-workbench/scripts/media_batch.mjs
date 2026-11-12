@@ -336,6 +336,11 @@ export async function runMediaPipeline(inputJobs, {
   try { report.controlCalls++; await observe(await withDeadline(readControl(), localTimeoutMs, '控制读取')); }
   catch (error) { controller.stop(error.message ?? error); }
   report.totalMs = tick() - start;
+  report.returnToCaptureMs = report.events.flatMap((event, index) => {
+    if (event.type !== 'tool-returned') return [];
+    const captured = report.events.slice(index + 1).find(candidate => candidate.type === 'captured' && candidate.id === event.id);
+    return captured ? [captured.elapsedMs - event.elapsedMs] : [];
+  });
   report.nextSubmissionAfterCaptureMs = report.events.flatMap((event, index) => {
     if (event.type !== 'captured') return [];
     const next = report.events.slice(index + 1).find(candidate => candidate.type === 'call-started');

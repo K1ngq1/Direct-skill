@@ -69,6 +69,32 @@ function fixture(t, version = 1) {
   return { directory, plan, workflow, track, seal, feedback, importFeedback };
 }
 
+test('single run accepts checked Agent selections without user confirmation and forbids video results', t => {
+  const { directory, plan, workflow, seal, track } = fixture(t, 2);
+  plan.run.automation = { mode: 'single-run', userRequest: '自动检查采用图片，视频不生成', assetSelection: 'agent', imageGeneration: true, videoGeneration: false };
+  save(path.join(directory, 'visual-plan.json'), plan);
+  workflow.sourcePlanHash = promptHash(JSON.stringify(plan));
+  for (const image of workflow.images) {
+    image.review = { status: 'usable', reason: '软件夹具的图片检查记录', reviewer: 'test', outputSha256: image.sha256 };
+    image.selection.selectedAt = '2026-11-11T00:00:00Z';
+  }
+  assert.deepEqual(validateVideoWorkflow(directory, workflow).pendingImageIds, []);
+  delete workflow.images[0].selection.selectedAt;
+  assert.deepEqual(validateVideoWorkflow(directory, workflow).pendingImageIds, [workflow.images[0].id]);
+  workflow.images[0].selection.selectedAt = '2026-11-11T00:00:00Z';
+  const sealed = seal(workflow);
+  assert.deepEqual(sealed.pendingImageIds, []);
+  assert.ok(workflow.images.every(image => image.approval.status === 'pending' && image.approval.by === null));
+  const cli = fileURLToPath(new URL('../scripts/video.mjs', import.meta.url));
+  const run = spawnSync(process.execPath, [cli, 'validate', directory, sealed.file], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(run.status, 0, run.stderr); assert.deepEqual(JSON.parse(run.stdout).pendingImageIds, []);
+  workflow.images[0].review.outputSha256 = 'b'.repeat(64);
+  assert.throws(() => validateVideoWorkflow(directory, workflow), /输出哈希/);
+  workflow.images[0].review.outputSha256 = workflow.images[0].sha256;
+  workflow.results = [{ videoShotId: 'V01', status: 'unknown', attempts: 1, manualEdits: '' }];
+  assert.throws(() => validateVideoWorkflow(directory, workflow), /不得记录视频生成结果/);
+});
+
 test('static revision binds real references and updates prose while preserving the frozen source', async t => {
   const { directory, workflow, track, seal, importFeedback } = fixture(t), original = fs.readFileSync(path.join(directory, 'visual-plan.json'));
   workflow.shotPrompts = [{ shotId: 'S07a', text: '参考图中的人物站在原桌旁，双手自然垂下。', basis: '本轮明确复用现有人物参考',

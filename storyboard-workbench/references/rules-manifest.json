@@ -12,13 +12,17 @@
     "export": ["references/visual-workflow.md", "schemas/visual-plan-v2.json"],
     "legacy": ["references/legacy-workbench.md", "references/data-contract.md", "references/production-framework.md", "references/story-planning.md"]
   },
-  "onDemand": ["references/video-workflow.md", "references/media-execution.md"],
+  "onDemand": ["references/video-workflow.md", "references/media-execution.md", "references/single-run.md"],
   "scripts": [
     "scripts/runtime.mjs",
     "scripts/import_excel.py",
     "scripts/visual.mjs",
     "scripts/video.mjs",
     "scripts/generation.mjs",
+    "scripts/generation_bridge.mjs",
+    "scripts/generation_codex_host.mjs",
+    "scripts/generation_stream.mjs",
+    "scripts/single_run.mjs",
     "scripts/generation_batch_store.mjs",
     "scripts/media_batch.mjs",
     "scripts/process_lock.mjs",

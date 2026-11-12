@@ -50,6 +50,8 @@ node "storyboard-workbench/scripts/visual.mjs" export "projects/demo"
 
 ## 平台适配
 
+需要一次完成媒体准备时，可直接要求：“按单次自动制作模式处理这个粗脚本，自动检查并采用资产、生成分镜图，最后在 LibTV 建好视频节点，不生成视频，中途不用等我确认。” 当前 Agent 会按[单次自动制作流程](storyboard-workbench/references/single-run.md)连续推进，复用现有工具、队列和 Excel，不安装常驻后台；实际工具或额度缺失时保留已完成成果并报告阻塞。
+
 | 宿主 | 项目发现入口 |
 |---|---|
 | Codex | `.agents/skills/storyboard-workbench/` |

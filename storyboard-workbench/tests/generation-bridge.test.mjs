@@ -19,6 +19,38 @@ function fixture() {
   return { root, source, recipe, prepared, directory, input };
 }
 
+test('agent-selected asset preparation binds the opt-in plan and rejects changed or unknown evidence', async t => {
+  const f = fixture(), image = path.join(f.root, 'asset.png'), manifest = path.join(f.root, 'manifest.json'), plan = path.join(f.root, 'plan.json');
+  t.after(() => {
+    for (const file of [f.source, f.recipe, image, manifest, plan, f.prepared]) if (fs.existsSync(file)) fs.unlinkSync(file);
+    fs.rmdirSync(f.root);
+  });
+  fs.writeFileSync(image, 'actual image bytes');
+  const evidence = { status: 'succeeded', targetId: 'P1', output: { path: 'asset.png', sha256: digest(image) },
+    approval: { status: 'pending', by: null }, selection: { by: 'agent', reason: '已检查', selectedAt: '2026-11-11T00:00:00Z' },
+    review: { status: 'usable', reason: '具体画面检查证据', reviewer: 'test', outputSha256: digest(image) } };
+  write(plan, { schemaVersion: 2, projectId: 'single-run-test', run: { automation: { mode: 'single-run', userRequest: '自动采用，停在视频节点', assetSelection: 'agent', imageGeneration: true, videoGeneration: false } } });
+  const manifestData = { projectId: 'single-run-test', sourcePlanHash: digest(plan), tasks: [evidence] };
+  write(manifest, manifestData);
+  f.input.phase = 'storyboards';
+  Object.assign(f.input.jobs[0], { requiredAssetIds: ['P1'], references: [{ assetId: 'P1', path: image, confirmation: { path: manifest, pointer: '/tasks/0' } }] });
+  assert.ok(prepareRequests(f.input).entries[0].blocked.includes('reference-not-confirmed'));
+  f.input.planSource = { path: plan, pointer: '' };
+  const prepared = prepareRequests(f.input);
+  assert.deepEqual(prepared.entries[0].blocked, []);
+  assert.equal(prepared.entries[0].job.request.prompt, JSON.parse(fs.readFileSync(f.source)).text);
+  write(manifest, { ...manifestData, projectId: 'other-project' });
+  assert.ok(prepareRequests(f.input).entries[0].blocked.includes('reference-not-confirmed'));
+  write(manifest, { ...manifestData, tasks: [{ ...evidence, status: 'unknown' }] });
+  assert.ok(prepareRequests(f.input).entries[0].blocked.includes('reference-not-confirmed'));
+  write(manifest, manifestData); write(f.prepared, prepared);
+  write(manifest, { ...manifestData, sourcePlanHash: 'b'.repeat(64) });
+  await assert.rejects(bridge({ operation: 'init', directory: f.directory, prepared: f.prepared, authorizedCount: 1 }), /来源已变化/);
+  write(manifest, manifestData);
+  write(plan, { schemaVersion: 2, run: {} });
+  await assert.rejects(bridge({ operation: 'init', directory: f.directory, prepared: f.prepared, authorizedCount: 1 }), /来源已变化/);
+});
+
 test('preparation derives exact long text without submission; CLI accepts files and stdin', async () => {
   const f = fixture();
   const command = file => spawnSync(process.execPath, ['storyboard-workbench/scripts/generation_bridge.mjs', ...(file ? [file] : [])], { encoding: 'utf8', input: file ? undefined : JSON.stringify({ operation: 'snapshot', directory: f.directory }) });

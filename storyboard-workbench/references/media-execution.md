@@ -63,6 +63,37 @@ node storyboard-workbench/scripts/generation_bridge.mjs "<request-file.json>"
 
 宿主继续加载 `generation.mjs host-source` 中的 `runMediaBatchAndSummarize`，不另写队列。将 bridge 的 prepare/capture/finalize/readControl/acknowledgeControl/snapshot 接到同名回调；execute 直接调用用户授权的图片工具，按工具要求展示返回图；summarize 回调只传 report，由桥接读取磁盘结果。init 返回的 jobs 仅供调度，完整 request 在 prepare 时读取。固定参考按工具要求在提交前查看一次。
 
+### Codex 固定执行入口
+
+Codex/imagegen 优先使用 [generation_codex_host.mjs](../scripts/generation_codex_host.mjs) 的 `runCodexImageBatch`，不逐图手写提交、wait、capture 和 finalize。普通 Node 可直接导入；code-mode 用以下命令读取同一入口源码并保留在宿主变量中，不打印回主对话：
+
+```text
+node storyboard-workbench/scripts/generation.mjs codex-host-source
+```
+
+文件边界使用同文件的 `createGenerationNodeBridge(nodeExecutable)`。传入实际 Node 可执行文件的绝对路径；它通过参数数组和 UTF-8 stdin 调用现有 `generation_bridge.mjs`，不经过 shell，不新增服务。在 node_repl 中只初始化一次，将请求交给该函数并返回 JSON；code-mode 的 `nodeCall` 仅封装这个已初始化的本地调用，解析 `{ok,value}` 的工作已由桥接完成，工具级错误仍须抛出。不要将整个队列放在 node_repl 中等待它回调自身。
+
+宿主的整批调用如下；`hostSource` 是上述命令的原始 stdout，`nodeCall(request)` 返回文件桥接的解析值：
+
+```javascript
+const run = new Function(hostSource + '\nreturn runCodexImageBatch;')();
+const summary = await run({
+  directory: batchDirectory, prepared: preparedFile, authorizedCount,
+  bridge: request => nodeCall(request),
+  generateImage: request => tools.image_gen__imagegen(request),
+  displayImage: result => generatedImage(result)
+});
+text(summary);
+```
+
+`preparedFile` 必须是 compile 已保存的冻结请求，`authorizedCount` 须等于本轮授权任务数。此入口固定原生 imagegen，沿用冻结批次的并发数（默认1）、依赖和恢复合同；每阶段一个持续运行的执行单元。等待/yield 只是读取进度，不是下一张提交或保存的前提；不要把工具调用拆成一个 cell、持久化拆成下一轮 Agent 调用。
+
+每张返回后先刷盘最小回执，再同步发出原生预览，复制与哈希校验由现有收尾队列自动完成。预览回调是 `generatedImage` 这样的同步发出函数，不等待用户或模型查看；预览报错、返回异步 viewer 或挂起，不将已生成图片改成失败、不重投。问题留在 `preview.errors`，成功图仍可保存与交付；预览问题不等于画面已检查。原工具返回只暂存到该张回执保存，批末回包只含索引、状态计数、路径与预览问题，不把整批图片/base64送回控制对话。
+
+Agent 批量创作并核对完整正文；资产出齐后实际看图采用，再提交依赖它的分镜；独立分镜批次完成后集中逐图检查，必要的首尾帧依赖与定向修正仍单独核对。不得用提速跳过看图、变动检查或用户原件保护。Excel 沿用既有封存入口集中导出，不逐张回写。
+
+批次 report 和汇总 timing 增加 `returnToCaptureMs`（工具返回到持久化回执回调结束），沿用 `nextSubmissionAfterCaptureMs`（回执回调结束到下一次工具调用）和 `batchWallMs`；本地单调耗时、宿主 UTC 与 GPU 时间继续分开。查看预览不是计时结束条件。下一次实际授权制作时核对前两项 P95，目标分别为10秒、5秒；缺失样本记未知，依赖等待、暂停和未返回任务单列，不伪称实测达标。端到端墙钟、人工介入、可用图数和返工量另记；不得把并行耗时相加或拿离线 mock 速度承诺生产提速。LibTV 暂不纳入本次图片提速验收，不为测速追加生图。
+
 工具等待采用 callTimeoutMs:300000，本地桥接采用 localTimeoutMs:120000；具体宿主有更明确限制时遵循真实能力。不靠延长超时或增加槽位掩盖异常。一个干净执行上下文处理整批，主对话只收简短进度、异常和索引。已有 v2 批次可通过同一入口接手 batch.json，旧 v1 仍走原合同；没有准备记录的历史批次不宣称已做来源预备核验。
 
 prepare 合并独占认领、参数/依赖/参考校验和请求快照；capture 将工具身份、原图位置和错误同步刷盘，再返回 persisted:true，随后释放生成名额；finalize 合并复制、哈希校验和结果登记。原件路径只能来自实际工具回执，格式未知不猜测。每张失败独立登记，不保存 base64。
@@ -100,6 +131,8 @@ node storyboard-workbench/scripts/generation.mjs audit-execution "<rollout.jsonl
 未指定 turnId 时读取最后一轮。输出只含任务身份、时间和执行区间，不回传 Prompt、图片或凭据。无事件时峰值为 null；事件区间有重叠才表示宿主可观测执行并发，服务端计算峰值仍为 null。不能将某次观测为1推广成 imagegen 永久上限，也不能将四个挂起 Promise 或 mock 并发宣传为四图同时生成。宿主执行串行时先处理上下文与回执瓶颈，保留通用四槽供其他有并发能力的工具；未经新授权实测不宣称改槽能提速。
 
 运行 `node --test storyboard-workbench/tests/generation-bridge.test.mjs storyboard-workbench/tests/generation-pipeline.test.mjs storyboard-workbench/tests/generation-batch.test.mjs`，只用 mock 与临时图片。16项比较桥接、控制调用、补位、积压、槽位利用率和总耗时；关键断言为“其余三张未返回、首张仍收尾，第五张已提交”。mock 不证明真实容量或提速，真实压测另需任务数与预算授权。
+
+明确启用[单次自动制作](single-run.md)的 v2 项目，资产实际看图通过后由 Agent 采用并继续，用户确认保留待定；视频只走待运行节点交付，不走生成队列。未启用时沿用用户确认要求。
 
 ## LibTV 生成调度与断点恢复
 

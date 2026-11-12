@@ -165,6 +165,7 @@ export async function createLibTVCanvasSession({ projectId, bridge, call, paused
     }
     if (name === 'create_node' && (args.run !== false || !['image', 'video', 'audio', 'text'].includes(args.nodeType))) throw issue('画布节点须显式 run:false，且类型有效', 'failed');
     if (name === 'manage_group' && args.action !== 'create') throw issue('画布交付只允许创建分组', 'failed');
+    if (name === 'manage_group' && args.run !== undefined && args.run !== false) throw issue('画布分组不得执行生成', 'failed');
   };
   const deliver = receipt => {
     if (receipt.status !== 'completed') throw issue(`${receipt.tool} 返回 ${receipt.status}`, receipt.status);

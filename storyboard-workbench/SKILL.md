@@ -36,6 +36,7 @@ node "storyboard-workbench/scripts/runtime.mjs" rules ingest --adapter default -
 | 编写 v2 JSON、封存、修订、候选、恢复、绑定或更新 Excel | [命令与交付合同](references/visual-workflow.md)，使用其中请求结构与状态处理 |
 | 视频 Prompt、参数、音乐、镜头规划或验收 | [视频工作流](references/video-workflow.md)，从全片规划开始沿用到核对与导出 |
 | 整套制作 Prompt 交接、保存可提交图片请求，或获授权生成、补图、LibTV 入库／恢复 | [媒体执行](references/media-execution.md)；图片阶段另读[资产先行流程](references/visual-workflow.md#0-可调整的完整-prompt-与分阶段出图默认流程) |
+| 用户明确授权一次完成生图并停在 LibTV 待运行视频节点，不逐阶段等待对话 | [单次自动制作](references/single-run.md)，覆盖本次资产采用与阶段推进，复用现有创作、检查和媒体入口 |
 | 明确提供／要求校准标准或人评 | [评分规则](references/visual-rubric.md#人工评分与版本化标准)；存在指定标准时按其来源与版本读取，否则无需标准也能创作 |
 
 ## 从全片到交付
@@ -47,6 +48,6 @@ node "storyboard-workbench/scripts/runtime.mjs" rules ingest --adapter default -
 5. **封存与交付。** 新版文本任务使用 `seal --brief` 取得本版人物与场景绑定，按[交付合同](references/visual-workflow.md#封存检查与局部修订)保存资产正文，再用 `deliver` 一次导出并回读正式 Excel。检查返回的问题后局部修复。视频规划使用 `video.mjs finalize`。已有文件只需复核时用 `verify-excel`。汇报时区分计划核对和文件验收。
 6. **修订与移交。** 使用现有 revise/add-candidate/select/restore 等入口保存有来源的新版本；检查和评分绑定对应正文，不机械重写历史。移交完整 Skill、本次授权原稿、JSON、历史、导出及实际参考；未执行的检查和未生成的媒体如实标明。
 
-整套制作 Prompt 完整核对后，按媒体准备入口保存来源绑定与可执行请求；参考或参数未就绪则等待依赖。仅润色现有文字且未涉及制作交接时，不启动媒体准备。准备请求不等于获得生成授权；生图时复用未变请求，不重新创作整片。资产确认前不提交依赖它的分镜；数量、工具与阶段服从本次要求。具体视图、画幅、并发、恢复与一次集中回写只在专项规则维护。
+整套制作 Prompt 完整核对后，按媒体准备入口保存来源绑定与可执行请求；参考或参数未就绪则等待依赖。仅润色现有文字且未涉及制作交接时，不启动媒体准备。准备请求不等于获得生成授权；生图时复用未变请求，不重新创作整片。未启用单次自动制作时，资产确认前不提交依赖它的分镜；启用后按专项流程实际检查并采用。数量、工具与阶段服从本次要求。具体视图、画幅、并发、恢复与一次集中回写只在专项规则维护。
 
 `videoPrompt` 与静态 `prompt.text` 分开，沿用同一人物、场景和连续性；不建立第二份权威正文。视频先锁定画幅与试片／最终画质，参数与音乐独立交付，正文不写时间段、秒数或模型限制。完整动作与升级规则以视频工作流为准。

@@ -19,5 +19,7 @@ node "storyboard-workbench/scripts/runtime.mjs" rules plan --adapter codex
 - 正文通过文件写入工具保存为 UTF-8；脚本完成状态和实际输出才是检查证据。若工具返回继续运行的任务，等待实际完成后记录结果。
 - `--adapter codex` 记录显式宿主选择，不自动确认图片理解、工具调用或任何具体模型版本；这些能力逐项填实际观察。
 - 本项目的本地脚本可在 Codex 工作环境中执行检查，具体结果以对应版本的验收记录为准。此证据不覆盖其他机器、云环境、权限配置或真实模型的画面质量。
+- 已授权 imagegen 批次使用[媒体规则的 Codex 固定执行入口](../references/media-execution.md#codex-固定执行入口)，一次宿主调用连续提交、保存并汇总；原生图片工具仍只在当前会话宿主执行，不能改成普通 Node CLI 调用模型。
+- 用户要求已就绪镜头提前运行时，使用[单次制作的流式入口](../references/single-run.md#按依赖提前开工)，通过同一宿主源码中的 `runCodexImageStream` 消费持续发布的请求与采用记录。
 
 官方入口核对日期：2026-10-19。没有本次运行证据的能力保持 `unknown`；内容校验与错误处理仍使用共用脚本。
