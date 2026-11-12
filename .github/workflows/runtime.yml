@@ -22,3 +22,5 @@ jobs:
       - run: python distribution/public_files.py
       - run: node storyboard-workbench/scripts/runtime.mjs doctor
       - run: python distribution/build.py --output release/direct-skill.zip
+      - run: python distribution/install.py --archive release/direct-skill.zip --dest release/install-smoke --skip-mcp
+      - run: node release/install-smoke/direct-skill/storyboard-workbench/scripts/runtime.mjs doctor
