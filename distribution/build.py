@@ -41,6 +41,10 @@ def package_readme(text, revision, files):
 def build(output, ref='HEAD'):
     revision = git('rev-parse', '--verify', ref + '^{commit}').decode().strip()
     names = git('ls-tree', '-r', '--name-only', revision).decode('utf-8').splitlines()
+    allowed = set(json.loads(git('show', revision + ':distribution/public-files.json'))['files'])
+    unexpected = sorted(set(names) - allowed)
+    if unexpected:
+        raise ValueError('Commit contains files outside public runtime scope: ' + ', '.join(unexpected))
     selected = []
     for name in names:
         public = name in ['AGENTS.md', 'LICENSE', 'requirements.txt', 'storyboard-workbench/SKILL.md', 'storyboard-workbench/assets/web/workflow.mjs']
@@ -51,12 +55,8 @@ def build(output, ref='HEAD'):
                 raise ValueError('Non-runtime asset in allowlist: ' + name)
             selected.append(name)
     files = {name: git('show', revision + ':' + name) for name in selected}
-    # Legacy teaching examples remain available online without shipping the test fixture library.
-    name = 'storyboard-workbench/references/story-planning.md'
-    files[name] = re.sub(r'\]\(\.\./tests/fixtures/([^)]*)\)',
-                         lambda m: '](https://github.com/K1ngq1/Direct-skill/blob/' + revision + '/storyboard-workbench/tests/fixtures/' + m[1] + ')',
-                         files[name].decode('utf-8')).encode('utf-8')
     files['SKILL.md'] = ENTRY.encode('utf-8')
+    files['AGENTS.md'] = package_readme(files['AGENTS.md'].decode('utf-8'), revision, files).encode('utf-8')
     files['README.md'] = package_readme(git('show', revision + ':README.md').decode('utf-8'), revision, files).encode('utf-8')
     files['agents/openai.yaml'] = git('show', revision + ':storyboard-workbench/agents/openai.yaml')
     manifest = {'schemaVersion': 1, 'sourceRevision': revision, 'files': [

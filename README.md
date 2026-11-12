@@ -153,7 +153,7 @@ Agent 负责创作与视觉判断，本地脚本负责确定性的文件、版�
 - 新任务使用 v2 合同，历史项目继续按原合同读取。实际宿主能力以本次运行观察为准。
 - 交付验收分别记录程序检查、正文核对、画面检查与用户确认。节点存在、任务接受或规则哈希均不足以证明实际画面质量。
 - 本地装载、链接、数据合同和执行恢复有程序测试。Claude Code、WorkBuddy 客户端及跨模型端到端效果仍需实际验证。
-- 规则精简的收益需通过真实任务测量；模型遵循规则的效果与媒体生成质量仍需验收。历史对照及限制见[表达规则验证](docs/PROMPT-LANGUAGE-VERIFICATION.md)、[首版记录](docs/FIRST-RELEASE.md)、[媒体执行记录](docs/MEDIA-PIPELINE-VERIFICATION.md)。
+- 规则精简的收益需通过真实任务测量；模型遵循规则的效果与媒体生成质量仍需验收。历史验收记录与测试材料保留在本地。
 - 中文字体与排版需在交付目标环境核对。安装和本地项目使用说明以本 README 为入口，Agent 执行约束见 [AGENTS.md](AGENTS.md)，业务规则按 [Skill](storyboard-workbench/SKILL.md) 路由读取。
 
 <details>
@@ -162,8 +162,8 @@ Agent 负责创作与视觉判断，本地脚本负责确定性的文件、版�
 从完整仓库运行与改动范围相称的检查。
 
 ~~~text
-npm test
-python -m unittest discover -s storyboard-workbench/tests -p "test_import*.py"
+python distribution/public_files.py
+node storyboard-workbench/scripts/runtime.mjs doctor
 ~~~
 
 使用 `python distribution/build.py --output <新文件.zip>` 从已提交的公开运行文件构建独立包。推送 `skill-v*` 标签后由 GitHub Actions 验证并发布 ZIP、校验文件和安装器。包内 package-manifest.json 记录源码提交及文件清单，用户项目、素材、凭据和历史人评保存在本地。
